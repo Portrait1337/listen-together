@@ -41,6 +41,7 @@ let pendingAlign = null;
 let reconnectTimer = null;
 let creatingRoom = false;
 let dragging = false;
+let enteredRoom = false;
 
 // ---------- 连接 ----------
 function send(obj) {
@@ -111,6 +112,7 @@ function handleMessage(d) {
       break;
     case 'state':
       state = d;
+      enterRoom(); // 加入者第一次收到房间状态时，切换到房间界面
       renderPlaylist();
       renderNowPlaying();
       applyTrackAndSync(true);
@@ -333,6 +335,8 @@ ui.unlock.addEventListener('click', () => {
 
 // ---------- 页面流程 ----------
 function enterRoom() {
+  if (enteredRoom) return;
+  enteredRoom = true;
   ui.landing.classList.add('hidden');
   ui.room.classList.remove('hidden');
   ui.roomCodeLabel.textContent = roomCode;
