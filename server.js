@@ -30,8 +30,11 @@ const upload = multer({
   defParamCharset: 'utf8',
   limits: { fileSize: MAX_UPLOAD },
   fileFilter: (req, file, cb) => {
-    if (!file.mimetype || file.mimetype.startsWith('audio/')) cb(null, true);
-    else cb(new Error('只支持音频文件'));
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const AUDIO_EXTS = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus', '.wma', '.amr'];
+    if (file.mimetype && file.mimetype.startsWith('audio/')) return cb(null, true);
+    if (AUDIO_EXTS.includes(ext)) return cb(null, true); // m4a 等文件类型标识不标准时，按扩展名放行
+    cb(new Error('只支持音频文件'));
   },
 });
 

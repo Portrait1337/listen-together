@@ -10,6 +10,7 @@ const ui = {
   hint: $('landingHint'),
   roomCodeLabel: $('roomCodeLabel'),
   copyBtn: $('copyBtn'),
+  leaveBtn: $('leaveBtn'),
   memberCount: $('memberCount'),
   memberList: $('memberList'),
   nowPlaying: $('nowPlaying'),
@@ -42,10 +43,19 @@ let reconnectTimer = null;
 let creatingRoom = false;
 let dragging = false;
 let enteredRoom = false;
+let leftRoom = false;
+let autoJoinTimer = null;
 
 // ---------- 连接 ----------
 function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+// 昵称永久保存在浏览器里，关闭网页后再次打开会自动填充
+function saveNickname(nick) {
+  try {
+    localStorage.setItem('lt_nickname', nick);
+  } catch {}
 }
 
 function connect() {
@@ -70,6 +80,7 @@ function connect() {
     handleMessage(d);
   };
   ws.onclose = () => {
+    if (leftRoom) return;
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(connect, 2000);
   };
@@ -128,6 +139,11 @@ function handleMessage(d) {
       break;
     case 'error':
       ui.hint.textContent = d.message || '出错了';
+      if (d.message && d.message.indexOf('房间不存在') >= 0) {
+        try {
+          sessionStorage.removeItem('lt_room');
+        } catch {}
+      }
       break;
   }
 }
@@ -167,7 +183,7 @@ function applyTrackAndSync(force) {
   }
   alignTo(target, force);
   if (state.playing) {
-    audio.play().catch(showUnlock);
+    safePlay();
   } else {
     audio.pause();
   }
@@ -179,7 +195,7 @@ audio.addEventListener('loadedmetadata', () => {
     pendingAlign = null;
   }
   renderTime();
-  if (state && state.playing) audio.play().catch(showUnlock);
+  if (state && state.playing) safePlay();
 });
 
 audio.addEventListener('timeupdate', () => {
@@ -195,7 +211,7 @@ audio.addEventListener('ended', () => {
 // 每 2.5 秒做一次漂移校正
 setInterval(() => {
   if (state && state.playing) {
-    if (audio.paused) audio.play().catch(showUnlock);
+    if (audio.paused) safePlay();
     else alignTo(targetPosition(), false);
   }
 }, 2500);
@@ -286,14 +302,28 @@ function appendChat(nick, text) {
   ui.chatList.scrollTop = ui.chatList.scrollHeight;
 }
 
-ui.chatSend.addEventListener('click', () => {
+function sendChat() {
   const text = ui.chatInput.value.trim();
   if (!text) return;
   send({ type: 'chat', text });
   ui.chatInput.value = '';
+}
+
+ui.chatSend.addEventListener('click', sendChat);
+
+// 中文输入法兼容：组词中按回车只确认拼音，不发送；确认后再次按回车才发送
+let chatComposing = false;
+ui.chatInput.addEventListener('compositionstart', () => {
+  chatComposing = true;
+});
+ui.chatInput.addEventListener('compositionend', () => {
+  chatComposing = false;
 });
 ui.chatInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') ui.chatSend.click();
+  if (e.key === 'Enter' && !chatComposing && !e.isComposing && e.keyCode !== 229) {
+    e.preventDefault();
+    sendChat();
+  }
 });
 
 // ---------- 上传 ----------
@@ -325,6 +355,17 @@ function showUnlock() {
   ui.unlock.classList.remove('hidden');
 }
 
+// 播放请求被"暂停/切歌"打断时不弹窗，只有被浏览器拦截（需要用户点击）时才弹
+function safePlay() {
+  const p = audio.play();
+  if (p) {
+    p.catch((err) => {
+      if (err && err.name === 'AbortError') return;
+      showUnlock();
+    });
+  }
+}
+
 ui.unlock.addEventListener('click', () => {
   ui.unlock.classList.add('hidden');
   if (state && state.playing && audio.src) {
@@ -337,47 +378,150 @@ ui.unlock.addEventListener('click', () => {
 function enterRoom() {
   if (enteredRoom) return;
   enteredRoom = true;
+  try {
+    sessionStorage.setItem('lt_room', roomCode);
+    sessionStorage.setItem('lt_nickname', nickname);
+  } catch {}
+  saveNickname(nickname);
   ui.landing.classList.add('hidden');
   ui.room.classList.remove('hidden');
   ui.roomCodeLabel.textContent = roomCode;
   ui.hint.textContent = '';
-  history.replaceState(null, '', '?room=' + roomCode);
   showUnlock();
 }
 
 ui.createBtn.addEventListener('click', () => {
-  nickname = ui.nickname.value.trim() || '匿名';
+  const nick = ui.nickname.value.trim();
+  if (!nick) {
+    ui.hint.textContent = '请先填写昵称';
+    ui.nickname.focus();
+    return;
+  }
+  nickname = nick;
+  saveNickname(nick);
   creatingRoom = true;
   roomCode = null;
+  leftRoom = false;
+  clearTimeout(autoJoinTimer);
   connect();
 });
 
 ui.joinBtn.addEventListener('click', () => {
-  nickname = ui.nickname.value.trim() || '匿名';
+  const nick = ui.nickname.value.trim();
+  if (!nick) {
+    ui.hint.textContent = '请先填写昵称';
+    ui.nickname.focus();
+    return;
+  }
+  nickname = nick;
+  saveNickname(nick);
   roomCode = ui.roomCodeInput.value.trim().toUpperCase();
   if (!roomCode) {
     ui.hint.textContent = '请输入房间码';
     return;
   }
   creatingRoom = false;
+  leftRoom = false;
+  clearTimeout(autoJoinTimer);
   connect();
 });
 
+// 房间号输入框有内容时，禁用"创建房间"按钮
+function updateCreateBtn() {
+  ui.createBtn.disabled = ui.roomCodeInput.value.trim().length > 0;
+}
+
+// 房间码输入：只接受字母和数字；组词中不干预输入法，组词结束后统一清理
+let roomComposing = false;
+ui.roomCodeInput.addEventListener('compositionstart', () => {
+  roomComposing = true;
+});
+ui.roomCodeInput.addEventListener('compositionend', () => {
+  roomComposing = false;
+  updateRoomCodeInput();
+});
+ui.roomCodeInput.addEventListener('beforeinput', (e) => {
+  if (e.data && /[^A-Za-z0-9]/.test(e.data)) e.preventDefault();
+});
+function updateRoomCodeInput() {
+  if (roomComposing) return;
+  const v = ui.roomCodeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (ui.roomCodeInput.value !== v) ui.roomCodeInput.value = v;
+  updateCreateBtn();
+}
+ui.roomCodeInput.addEventListener('input', updateRoomCodeInput);
+
 ui.copyBtn.addEventListener('click', () => {
-  const link = location.origin + '/?room=' + roomCode;
   const done = () => {
     ui.copyBtn.textContent = '已复制';
-    setTimeout(() => (ui.copyBtn.textContent = '复制链接'), 1600);
+    setTimeout(() => (ui.copyBtn.textContent = '复制房间号'), 1600);
   };
   if (navigator.clipboard && window.isSecureContext) {
-    navigator.clipboard.writeText(link).then(done).catch(() => prompt('复制链接给群友：', link));
+    navigator.clipboard.writeText(roomCode).then(done).catch(() => prompt('房间号：', roomCode));
   } else {
-    prompt('复制链接给群友：', link);
+    prompt('房间号：', roomCode);
   }
 });
 
-// 从分享链接进入时，预填房间码
+// 退出房间：断开连接、清空记录、回到输入房间号页面
+function leaveRoom() {
+  leftRoom = true;
+  clearTimeout(autoJoinTimer);
+  clearTimeout(reconnectTimer);
+  try {
+    if (ws) ws.close();
+  } catch {}
+  ws = null;
+  try {
+    sessionStorage.removeItem('lt_room');
+    sessionStorage.removeItem('lt_nickname');
+  } catch {}
+  audio.pause();
+  audio.removeAttribute('src');
+  state = null;
+  members = [];
+  enteredRoom = false;
+  roomCode = null;
+  creatingRoom = false;
+  ui.unlock.classList.add('hidden');
+  ui.roomCodeInput.value = '';
+  updateCreateBtn();
+  ui.landing.classList.remove('hidden');
+  ui.room.classList.add('hidden');
+  ui.hint.textContent = '';
+  history.replaceState(null, '', location.pathname);
+}
+ui.leaveBtn.addEventListener('click', leaveRoom);
+
+// 分享链接只预填房间号；同一标签页刷新时自动回到房间（关闭标签页后记录自动清除）
 (function () {
-  const code = new URLSearchParams(location.search).get('room');
-  if (code) ui.roomCodeInput.value = code.toUpperCase();
+  const codeFromUrl = new URLSearchParams(location.search).get('room');
+  if (codeFromUrl) ui.roomCodeInput.value = codeFromUrl.toUpperCase();
+
+  let lastNick = '';
+  try {
+    lastNick = localStorage.getItem('lt_nickname') || '';
+  } catch {}
+  if (lastNick) ui.nickname.value = lastNick;
+
+  let savedRoom = '';
+  let savedNick = '';
+  try {
+    savedRoom = sessionStorage.getItem('lt_room') || '';
+    savedNick = sessionStorage.getItem('lt_nickname') || '';
+  } catch {}
+
+  if (savedRoom && savedNick && savedNick !== '匿名') {
+    ui.roomCodeInput.value = savedRoom;
+    nickname = savedNick || lastNick;
+    roomCode = savedRoom;
+    creatingRoom = false;
+    leftRoom = false;
+    ui.hint.textContent = '正在自动回到房间…';
+    autoJoinTimer = setTimeout(connect, 300);
+  } else if (savedRoom) {
+    // 有房间记录但没有有效昵称：只预填房间号，等用户填写昵称后手动加入
+    ui.roomCodeInput.value = savedRoom;
+  }
+  updateCreateBtn();
 })();

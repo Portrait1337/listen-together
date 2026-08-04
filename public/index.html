@@ -11,7 +11,7 @@
     <h1>🎧 一起听</h1>
     <p class="sub">和群友同步听同一段音频</p>
     <input id="nickname" type="text" placeholder="你的昵称" autocomplete="nickname">
-    <input id="roomCode" type="text" placeholder="房间码（加入时填）" autocomplete="off">
+    <input id="roomCode" type="text" placeholder="房间码（加入时填）" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="6">
     <div class="row">
       <button id="createBtn">创建房间</button>
       <button id="joinBtn" class="secondary">加入房间</button>
@@ -25,7 +25,10 @@
         <div class="room-title">房间 <b id="roomCodeLabel">-</b></div>
         <div class="room-meta"><span id="memberCount">0</span> 人在听</div>
       </div>
-      <button id="copyBtn" class="small">复制链接</button>
+      <div class="head-btns">
+        <button id="copyBtn" class="small">复制房间号</button>
+        <button id="leaveBtn" class="small danger">退出房间</button>
+      </div>
     </div>
 
     <div class="card">
@@ -46,7 +49,7 @@
       <div class="card-head">
         <span>播放列表</span>
         <button id="uploadBtn" class="small">上传音频</button>
-        <input id="fileInput" type="file" accept="audio/*" hidden>
+        <input id="fileInput" type="file" accept="audio/*,.m4a" hidden>
       </div>
       <div id="playlist" class="playlist"></div>
     </div>

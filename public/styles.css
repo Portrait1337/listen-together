@@ -64,7 +64,8 @@ button:hover {
 }
 
 button.secondary {
-  background: #2a2d37;
+  background: #ffcc00;
+  color: #1f1f1f;
 }
 
 button.small {
@@ -123,6 +124,16 @@ button:disabled {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.head-btns {
+  display: flex;
+  gap: 8px;
+}
+
+button.danger {
+  background: #4a2226;
+  color: #ff7b72;
 }
 
 .room-title {
