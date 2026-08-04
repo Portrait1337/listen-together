@@ -1,0 +1,284 @@
+const path = require('path');
+const fs = require('fs');
+const http = require('http');
+const crypto = require('crypto');
+const express = require('express');
+const multer = require('multer');
+const { WebSocketServer, WebSocket } = require('ws');
+
+const PORT = process.env.PORT || 3000;
+const MAX_UPLOAD = 200 * 1024 * 1024; // 200MB
+const EMPTY_ROOM_TTL = 30 * 60 * 1000; // 空房间 30 分钟后销毁
+
+const UPLOAD_DIR = path.join(__dirname, 'uploads');
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+const app = express();
+const server = http.createServer(app);
+
+// ---------- 音频上传 ----------
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+  filename: (req, file, cb) => {
+    const ext = (path.extname(file.originalname) || '.mp3').toLowerCase();
+    cb(null, crypto.randomBytes(8).toString('hex') + ext);
+  },
+});
+
+const upload = multer({
+  storage,
+  defParamCharset: 'utf8',
+  limits: { fileSize: MAX_UPLOAD },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype || file.mimetype.startsWith('audio/')) cb(null, true);
+    else cb(new Error('只支持音频文件'));
+  },
+});
+
+app.use(express.static(path.join(__dirname, 'public')));
+app.use('/uploads', express.static(UPLOAD_DIR));
+
+app.post('/api/upload', upload.single('file'), (req, res) => {
+  const room = rooms.get(String(req.body.roomId || '').toUpperCase().trim());
+  if (!room) {
+    return res.status(404).json({ error: '房间不存在，请重新加入' });
+  }
+  const track = {
+    id: crypto.randomBytes(6).toString('hex'),
+    name: req.file.originalname,
+    url: '/uploads/' + req.file.filename,
+    size: req.file.size,
+    uploader: String(req.body.nickname || '匿名').trim().slice(0, 20) || '匿名',
+  };
+  room.playlist.push(track);
+  if (room.currentIndex < 0) {
+    room.currentIndex = 0;
+    room.positionMs = 0;
+    room.updatedAt = Date.now();
+  }
+  broadcast(room, snapshot(room));
+  res.json({ ok: true, track });
+});
+
+// multer 等上传错误统一返回
+app.use((err, req, res, next) => {
+  res.status(400).json({ error: err.message || '上传失败' });
+});
+
+// ---------- 房间与实时同步 ----------
+const rooms = new Map();
+const roomTimers = new Map();
+const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function makeCode() {
+  let code;
+  do {
+    code = '';
+    for (let i = 0; i < 6; i++) code += CODE_CHARS[crypto.randomInt(CODE_CHARS.length)];
+  } while (rooms.has(code));
+  return code;
+}
+
+function effectivePosition(room) {
+  return room.playing ? room.positionMs + (Date.now() - room.updatedAt) : room.positionMs;
+}
+
+function snapshot(room) {
+  return {
+    type: 'state',
+    code: room.code,
+    name: room.name,
+    currentIndex: room.currentIndex,
+    playing: room.playing,
+    positionMs: room.positionMs,
+    updatedAt: room.updatedAt,
+    serverTime: Date.now(),
+    playlist: room.playlist,
+  };
+}
+
+function membersList(room) {
+  return Array.from(room.members.values()).map((m) => ({ nickname: m.nickname }));
+}
+
+function broadcast(room, msg) {
+  const data = JSON.stringify(msg);
+  for (const member of room.members.keys()) {
+    if (member.readyState === WebSocket.OPEN) member.send(data);
+  }
+}
+
+function createRoom(name, ws, nickname) {
+  const room = {
+    code: makeCode(),
+    name: String(name || '一起听').trim().slice(0, 30) || '一起听',
+    members: new Map(),
+    playlist: [],
+    currentIndex: -1,
+    playing: false,
+    positionMs: 0,
+    updatedAt: Date.now(),
+  };
+  rooms.set(room.code, room);
+  room.members.set(ws, { nickname });
+  return room;
+}
+
+function addMember(room, ws, nickname) {
+  room.members.set(ws, { nickname });
+  clearTimeout(roomTimers.get(room.code));
+}
+
+function removeMember(room, ws) {
+  room.members.delete(ws);
+  if (room.members.size === 0) {
+    clearTimeout(roomTimers.get(room.code));
+    roomTimers.set(
+      room.code,
+      setTimeout(() => {
+        rooms.delete(room.code);
+        roomTimers.delete(room.code);
+      }, EMPTY_ROOM_TTL)
+    );
+  }
+}
+
+function cleanNick(n) {
+  const s = String(n || '').trim();
+  return s ? s.slice(0, 20) : '匿名';
+}
+
+function handleControl(room, msg) {
+  const now = Date.now();
+  switch (msg.action) {
+    case 'play':
+      if (room.playlist.length === 0) return;
+      if (room.currentIndex < 0) room.currentIndex = 0;
+      if (!room.playing) {
+        room.playing = true;
+        room.updatedAt = now;
+      }
+      break;
+    case 'pause':
+      if (room.playing) {
+        room.positionMs = effectivePosition(room);
+        room.playing = false;
+        room.updatedAt = now;
+      }
+      break;
+    case 'seek': {
+      const pos = Number(msg.positionMs);
+      if (!Number.isFinite(pos)) return;
+      room.positionMs = Math.max(0, pos);
+      room.updatedAt = now;
+      break;
+    }
+    case 'next':
+      if (room.playlist.length === 0) return;
+      room.currentIndex = (room.currentIndex + 1) % room.playlist.length;
+      room.positionMs = 0;
+      room.updatedAt = now;
+      break;
+    case 'prev':
+      if (room.playlist.length === 0) return;
+      room.currentIndex = (room.currentIndex - 1 + room.playlist.length) % room.playlist.length;
+      room.positionMs = 0;
+      room.updatedAt = now;
+      break;
+    case 'select': {
+      const idx = Number(msg.index);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= room.playlist.length) return;
+      room.currentIndex = idx;
+      room.positionMs = 0;
+      room.updatedAt = now;
+      break;
+    }
+  }
+}
+
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+wss.on('connection', (ws) => {
+  let room = null;
+  let nickname = '匿名';
+
+  const send = (obj) => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  };
+
+  ws.on('message', (raw) => {
+    let msg;
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    switch (msg.type) {
+      case 'create_room':
+        if (room) return;
+        nickname = cleanNick(msg.nickname);
+        room = createRoom(msg.name, ws, nickname);
+        send({ type: 'room_created', code: room.code });
+        send(snapshot(room));
+        send({ type: 'members', members: membersList(room) });
+        break;
+
+      case 'join_room': {
+        if (room) return;
+        const code = String(msg.code || '').toUpperCase().trim();
+        const target = rooms.get(code);
+        if (!target) {
+          send({ type: 'error', message: '房间不存在，请检查房间码' });
+          return;
+        }
+        nickname = cleanNick(msg.nickname);
+        room = target;
+        addMember(room, ws, nickname);
+        send(snapshot(room));
+        send({ type: 'members', members: membersList(room) });
+        broadcast(room, { type: 'member_joined', nickname, members: membersList(room) });
+        break;
+      }
+
+      case 'control':
+        if (!room) return;
+        handleControl(room, msg);
+        broadcast(room, snapshot(room));
+        break;
+
+      case 'chat':
+        if (!room) return;
+        {
+          const text = String(msg.text || '').trim().slice(0, 200);
+          if (text) broadcast(room, { type: 'chat', nickname, text, time: Date.now() });
+        }
+        break;
+
+      case 'ping':
+        send({ type: 'pong', t1: msg.t1, serverTime: Date.now() });
+        break;
+
+      case 'request_state':
+        if (!room) return;
+        send(snapshot(room));
+        send({ type: 'members', members: membersList(room) });
+        break;
+    }
+  });
+
+  ws.on('close', () => {
+    if (room) {
+      removeMember(room, ws);
+      if (room.members.size > 0) {
+        broadcast(room, { type: 'member_left', nickname, members: membersList(room) });
+      }
+    }
+  });
+
+  ws.on('error', () => {});
+});
+
+server.listen(PORT, () => {
+  console.log('一起听已启动：http://localhost:' + PORT);
+});

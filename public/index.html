@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>一起听</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="landing" class="screen">
+    <h1>🎧 一起听</h1>
+    <p class="sub">和群友同步听同一段音频</p>
+    <input id="nickname" type="text" placeholder="你的昵称" autocomplete="nickname">
+    <input id="roomCode" type="text" placeholder="房间码（加入时填）" autocomplete="off">
+    <div class="row">
+      <button id="createBtn">创建房间</button>
+      <button id="joinBtn" class="secondary">加入房间</button>
+    </div>
+    <p id="landingHint" class="hint"></p>
+  </div>
+
+  <div id="room" class="screen hidden">
+    <div class="room-head">
+      <div>
+        <div class="room-title">房间 <b id="roomCodeLabel">-</b></div>
+        <div class="room-meta"><span id="memberCount">0</span> 人在听</div>
+      </div>
+      <button id="copyBtn" class="small">复制链接</button>
+    </div>
+
+    <div class="card">
+      <div class="now-playing">
+        <div id="nowPlaying">还没有音频</div>
+        <div id="nowUploader" class="muted"></div>
+      </div>
+      <input id="seek" type="range" min="0" max="0" value="0" step="1">
+      <div class="time-row"><span id="timeLabel">0:00 / 0:00</span></div>
+      <div class="controls">
+        <button id="prevBtn" class="icon" aria-label="上一首">⏮</button>
+        <button id="playBtn" class="icon big" aria-label="播放/暂停">▶</button>
+        <button id="nextBtn" class="icon" aria-label="下一首">⏭</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span>播放列表</span>
+        <button id="uploadBtn" class="small">上传音频</button>
+        <input id="fileInput" type="file" accept="audio/*" hidden>
+      </div>
+      <div id="playlist" class="playlist"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span>房内聊天</span></div>
+      <div id="chatList" class="chat-list"></div>
+      <div class="chat-input-row">
+        <input id="chatInput" type="text" placeholder="说点什么…" maxlength="200">
+        <button id="chatSend" class="small">发送</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span>成员</span></div>
+      <div id="memberList" class="members"></div>
+    </div>
+  </div>
+
+  <div id="unlock" class="hidden">
+    <div class="box">
+      <div class="big-icon">🔊</div>
+      <div>点击开始听</div>
+      <div class="muted small-text">加入一起听，跟着大家同步播放</div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

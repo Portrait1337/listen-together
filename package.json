@@ -1,0 +1,15 @@
+{
+  "name": "listen-together",
+  "version": "0.1.0",
+  "private": true,
+  "description": "一起听 - 群友同步听音频的网页版原型",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "multer": "^2.2.0",
+    "ws": "^8.18.0"
+  }
+}
