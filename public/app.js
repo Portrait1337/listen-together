@@ -41,6 +41,7 @@ let members = [];
 let offset = 0; // 估算的服务器时间 - 本地时间
 let reconnectTimer = null;
 let needAlign = false; // 正在等音频数据就绪后对齐进度
+let initialSeekDone = false; // 进房/换歌时是否已经在播放前跳到了目标进度
 let pendingPlay = false; // 对齐完成后需要继续播放
 let alignWatchUntil = 0; // 对齐观察期截止时间
 let lastAlignSeekAt = 0; // 上次自动跳转的时间，用于限制播放中反复跳转
@@ -156,7 +157,7 @@ function handleMessage(d) {
       enterRoom(); // 加入者第一次收到房间状态时，切换到房间界面
       renderPlaylist();
       renderNowPlaying();
-      applyTrackAndSync(true);
+      applyTrackAndSync();
       break;
     case 'members':
     case 'member_joined':
@@ -199,12 +200,14 @@ function alignTo(targetMs, force) {
   }
 }
 
-function applyTrackAndSync(force) {
+function applyTrackAndSync() {
   if (!state) return;
   const track = state.playlist[state.currentIndex];
   if (!track) {
     audio.pause();
     audio.removeAttribute('src');
+    needAlign = false;
+    initialSeekDone = false;
     renderTime();
     return;
   }
@@ -213,6 +216,7 @@ function applyTrackAndSync(force) {
   if (trackChanged) {
     audio.src = track.url;
     needAlign = true;
+    initialSeekDone = false;
     pendingPlay = state.playing;
     alignWatchUntil = Date.now() + 20000;
     return; // 等数据就绪后再对齐
@@ -225,7 +229,9 @@ function applyTrackAndSync(force) {
   needAlign = false;
   pendingPlay = false;
   alignWatchUntil = 0;
-  alignTo(target, force);
+  // 只有偏差足够大才跳转；不要每次收到状态广播都强制 seek，
+  // iOS 播放中反复 seek 会导致没有声音或断断续续
+  alignTo(target, false);
   if (state.playing) {
     safePlay();
   } else {
@@ -239,26 +245,35 @@ audio.addEventListener('loadedmetadata', () => {
   renderTime();
 });
 
-// 数据就绪后先开始播放；跳转统一等到 playing 事件（播放真正开始后）再做
-audio.addEventListener('canplay', () => {
-  if (needAlign) {
-    // 数据就绪后先只开始播放，不在播放前 seek（iOS Safari 播放前跳转会从头播放）
-    renderTime();
-    if (state && state.playing) safePlay();
-  }
-});
-
-// 播放真正开始后再跳转（移动端常见：播放前设置 currentTime 不生效）
-audio.addEventListener('playing', () => {
-  if (needAlign && (lastAlignSeekAt === 0 || Date.now() - lastAlignSeekAt >= 10000)) {
+// 数据就绪后先在播放前跳到房间进度，再开始播放。
+// iOS 不能在 loadedmetadata 里跳（WebKit bug 261512），也不能在播放开始后再跳
+// （iPhone Chrome/Safari 会变成进度条在走但没有声音），所以统一在 loadeddata 时对齐。
+function startAlignedPlayback() {
+  if (!needAlign) return;
+  if (!initialSeekDone) {
     alignTo(state.playing ? targetPosition() : state.positionMs, true);
+    initialSeekDone = true;
     lastAlignSeekAt = Date.now();
+  }
+  renderTime();
+  // 正在跳转时先不播放，等 seeked 完成后由 seeked 处理，避免 iOS 播放中跳转丢声音
+  if (state && state.playing && !audio.seeking) safePlay();
+}
+
+audio.addEventListener('loadeddata', startAlignedPlayback);
+audio.addEventListener('canplay', startAlignedPlayback);
+
+// 播放真正开始后不再跳转，避免 iOS 播放中 seek 导致没有声音
+audio.addEventListener('playing', () => {
+  if (needAlign) {
+    needAlign = false;
+    pendingPlay = false;
   }
 });
 
 // 跳转完成后确认对齐结束
 audio.addEventListener('seeked', () => {
-  if (needAlign) {
+  if (needAlign && initialSeekDone) {
     needAlign = false;
     pendingPlay = false;
     renderTime();
@@ -304,9 +319,11 @@ function sendControl(action, extra) {
 // 点击播放时在用户手势内立即本地播放，避免等服务端回包后再播放被浏览器拦截
 function playLocally() {
   if (!state || !state.playlist[state.currentIndex] || !audio.src) return;
-  needAlign = true;
-  pendingPlay = true;
-  alignWatchUntil = Date.now() + 20000;
+  if (needAlign) {
+    // 音频还没就绪：等对齐完成后再自动播放，避免从 0 抢跑
+    pendingPlay = true;
+    return;
+  }
   const p = audio.play();
   if (p) {
     p.catch((err) => {
@@ -389,9 +406,18 @@ function fmt(ms) {
 }
 
 function renderTime() {
-  const cur = audio.currentTime * 1000;
+  let cur = audio.currentTime * 1000;
+  // 音频还没就绪/还没对齐时，先显示房间的真实进度，避免进房后进度条长时间卡在 0
+  if (needAlign && state) {
+    cur = state.playing ? targetPosition() : state.positionMs;
+  }
   const dur = (audio.duration || 0) * 1000;
   ui.timeLabel.textContent = fmt(cur) + ' / ' + fmt(dur);
+  if (!dragging) {
+    ui.seek.value = audio.duration
+      ? Math.min(Math.round(cur), Math.floor(audio.duration * 1000))
+      : Math.round(cur);
+  }
 }
 
 // ---------- 聊天 ----------
@@ -580,36 +606,27 @@ function safePlay() {
 
 const SILENT_WAV = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
 
-// 用户点击"创建/加入"时，在点击手势内直接播放主播放器（静音一瞬间）来解锁它。
+// 用户点击"创建/加入"时，在点击手势内直接播放主播放器（一个无声音频）来解锁它。
 // iOS 浏览器按"播放器元素"单独计算解锁状态：只播放另一个临时音频不会解锁主播放器，
-// 未解锁时进度条会走但不会出声。
+// 未解锁时会出现进度条在走但没有声音。
 function unlockAudio() {
   try {
-    const hadSrc = !!audio.src;
-    const wasMuted = audio.muted;
-    if (!hadSrc) audio.src = SILENT_WAV;
-    audio.muted = true;
-    const restore = () => {
-      audio.pause();
-      audio.muted = wasMuted;
-      // 只在解锁用的静音音频还没被真正的歌曲替换掉时清理，避免误删房间歌曲
-      if (!hadSrc && audio.getAttribute('src') === SILENT_WAV) audio.removeAttribute('src');
-    };
+    // 静音音频本身没有任何声音，不需要用 muted，避免 iOS 把它当成"没有在播声音"而不解锁
+    audio.muted = false;
+    if (!audio.src) audio.src = SILENT_WAV;
     const p = audio.play();
-    if (p) {
-      p.then(restore).catch(restore);
-    } else {
-      restore();
-    }
+    if (p) p.catch(() => {});
   } catch {}
 }
 
 ui.unlock.addEventListener('click', () => {
   ui.unlock.classList.add('hidden');
   if (state && state.playing && audio.src) {
-    needAlign = true;
-    pendingPlay = true;
-    alignWatchUntil = Date.now() + 20000;
+    if (needAlign && !initialSeekDone) {
+      // 还在等音频就绪：等对齐完成后自动播放
+      pendingPlay = true;
+      return;
+    }
     const p = audio.play();
     if (p) p.catch(() => {});
   }
@@ -720,6 +737,10 @@ function leaveRoom() {
   } catch {}
   audio.pause();
   audio.removeAttribute('src');
+  needAlign = false;
+  initialSeekDone = false;
+  pendingPlay = false;
+  alignWatchUntil = 0;
   state = null;
   members = [];
   enteredRoom = false;
