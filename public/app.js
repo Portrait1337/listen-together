@@ -31,8 +31,7 @@ const ui = {
   unlock: $('unlock'),
 };
 
-const audio = new Audio();
-audio.preload = 'auto';
+const audio = $('player');
 
 let ws = null;
 let roomCode = null;
@@ -575,11 +574,29 @@ function safePlay() {
   }
 }
 
-// 用户点击"创建/加入"时用静音音频预解锁播放权限，让后续远程播放能直接出声
+const SILENT_WAV = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+
+// 用户点击"创建/加入"时，在点击手势内直接播放主播放器（静音一瞬间）来解锁它。
+// iOS 浏览器按"播放器元素"单独计算解锁状态：只播放另一个临时音频不会解锁主播放器，
+// 未解锁时进度条会走但不会出声。
 function unlockAudio() {
   try {
-    const silent = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA');
-    silent.play().catch(() => {});
+    const hadSrc = !!audio.src;
+    const wasMuted = audio.muted;
+    if (!hadSrc) audio.src = SILENT_WAV;
+    audio.muted = true;
+    const restore = () => {
+      audio.pause();
+      audio.muted = wasMuted;
+      // 只在解锁用的静音音频还没被真正的歌曲替换掉时清理，避免误删房间歌曲
+      if (!hadSrc && audio.getAttribute('src') === SILENT_WAV) audio.removeAttribute('src');
+    };
+    const p = audio.play();
+    if (p) {
+      p.then(restore).catch(restore);
+    } else {
+      restore();
+    }
   } catch {}
 }
 
