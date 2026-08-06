@@ -43,6 +43,7 @@ let offset = 0; // 估算的服务器时间 - 本地时间
 let reconnectTimer = null;
 let needAlign = false; // 正在等音频数据就绪后对齐进度
 let pendingPlay = false; // 对齐完成后需要继续播放
+let alignWatchUntil = 0; // 对齐观察期截止时间
 let creatingRoom = false;
 let dragging = false;
 let enteredRoom = false;
@@ -209,10 +210,12 @@ function applyTrackAndSync(force) {
     audio.src = track.url;
     needAlign = true;
     pendingPlay = state.playing;
+    alignWatchUntil = Date.now() + 20000;
     return; // 等数据就绪后再对齐
   }
   needAlign = false;
   pendingPlay = false;
+  alignWatchUntil = 0;
   alignTo(target, force);
   if (state.playing) {
     safePlay();
@@ -232,11 +235,26 @@ audio.addEventListener('loadedmetadata', () => {
 // 数据真正就绪后再对齐一次，确保跳转生效（慢网络下元数据就绪时可能还不可跳转）
 audio.addEventListener('canplay', () => {
   if (needAlign) {
-    needAlign = false;
-    pendingPlay = false;
     alignTo(state.playing ? targetPosition() : state.positionMs, true);
     renderTime();
     if (state && state.playing) safePlay();
+  }
+});
+
+// 播放真正开始后再跳转一次（移动端常见：播放前设置 currentTime 不生效）
+audio.addEventListener('playing', () => {
+  if (needAlign) {
+    alignTo(state.playing ? targetPosition() : state.positionMs, true);
+  }
+});
+
+// 跳转完成后确认对齐结束
+audio.addEventListener('seeked', () => {
+  if (needAlign) {
+    needAlign = false;
+    pendingPlay = false;
+    renderTime();
+    if (state && state.playing && audio.paused) safePlay();
   }
 });
 
@@ -244,6 +262,17 @@ audio.addEventListener('timeupdate', () => {
   if (audio.duration) ui.seek.max = Math.floor(audio.duration * 1000);
   if (!dragging) ui.seek.value = audio.currentTime * 1000;
   renderTime();
+  // 对齐观察期：持续核对进度，偏差大就再跳，到位就结束
+  if (needAlign && Date.now() < alignWatchUntil && state && state.playing) {
+    const target = targetPosition();
+    const diff = Math.abs(audio.currentTime * 1000 - target);
+    if (diff > 3000) {
+      alignTo(target, true);
+    } else if (diff <= 600) {
+      needAlign = false;
+      pendingPlay = false;
+    }
+  }
 });
 
 audio.addEventListener('ended', () => {
@@ -252,7 +281,8 @@ audio.addEventListener('ended', () => {
 
 // 每 2 秒做一次漂移校正
 setInterval(() => {
-  if (state && state.playing && !needAlign) {
+  if (state && state.playing) {
+    if (needAlign && Date.now() < alignWatchUntil) return; // 对齐进行中，避免从 0 抢先播放
     if (audio.paused) safePlay();
     else alignTo(targetPosition(), false);
   }
@@ -546,8 +576,11 @@ function unlockAudio() {
 ui.unlock.addEventListener('click', () => {
   ui.unlock.classList.add('hidden');
   if (state && state.playing && audio.src) {
-    alignTo(targetPosition(), true);
-    audio.play().catch(() => {});
+    needAlign = true;
+    pendingPlay = true;
+    alignWatchUntil = Date.now() + 20000;
+    const p = audio.play();
+    if (p) p.then(() => alignTo(targetPosition(), true)).catch(() => {});
   }
 });
 
