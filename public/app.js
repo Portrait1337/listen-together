@@ -41,6 +41,8 @@ let state = null;
 let members = [];
 let offset = 0; // 估算的服务器时间 - 本地时间
 let reconnectTimer = null;
+let needAlign = false; // 正在等音频数据就绪后对齐进度
+let pendingPlay = false; // 对齐完成后需要继续播放
 let creatingRoom = false;
 let dragging = false;
 let enteredRoom = false;
@@ -205,8 +207,12 @@ function applyTrackAndSync(force) {
   const trackChanged = !audio.src || audio.src.indexOf(track.url) === -1;
   if (trackChanged) {
     audio.src = track.url;
-    return; // 等 loadedmetadata 后再对齐
+    needAlign = true;
+    pendingPlay = state.playing;
+    return; // 等数据就绪后再对齐
   }
+  needAlign = false;
+  pendingPlay = false;
   alignTo(target, force);
   if (state.playing) {
     safePlay();
@@ -216,15 +222,22 @@ function applyTrackAndSync(force) {
 }
 
 audio.addEventListener('loadedmetadata', () => {
-  // 音频加载完成后按"当下"的服务器进度重新计算，避免用加载前的过期进度
-  if (state && state.playlist[state.currentIndex]) {
-    const cur = state.playlist[state.currentIndex];
-    if (audio.src.indexOf(cur.url) !== -1) {
-      alignTo(state.playing ? targetPosition() : state.positionMs, true);
-    }
+  if (needAlign) {
+    alignTo(state.playing ? targetPosition() : state.positionMs, true);
+    renderTime();
+    if (pendingPlay || (state && state.playing)) safePlay();
   }
-  renderTime();
-  if (state && state.playing) safePlay();
+});
+
+// 数据真正就绪后再对齐一次，确保跳转生效（慢网络下元数据就绪时可能还不可跳转）
+audio.addEventListener('canplay', () => {
+  if (needAlign) {
+    needAlign = false;
+    pendingPlay = false;
+    alignTo(state.playing ? targetPosition() : state.positionMs, true);
+    renderTime();
+    if (state && state.playing) safePlay();
+  }
 });
 
 audio.addEventListener('timeupdate', () => {
@@ -239,7 +252,7 @@ audio.addEventListener('ended', () => {
 
 // 每 2 秒做一次漂移校正
 setInterval(() => {
-  if (state && state.playing) {
+  if (state && state.playing && !needAlign) {
     if (audio.paused) safePlay();
     else alignTo(targetPosition(), false);
   }
@@ -253,6 +266,7 @@ function sendControl(action, extra) {
 // 点击播放时在用户手势内立即本地播放，避免等服务端回包后再播放被浏览器拦截
 function playLocally() {
   if (!state || !state.playlist[state.currentIndex] || !audio.src) return;
+  pendingPlay = true;
   alignTo(targetPosition(), true);
   const p = audio.play();
   if (p) {
