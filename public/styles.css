@@ -4,6 +4,16 @@
   padding: 0;
 }
 
+html,
+body {
+  overflow-x: hidden;
+  max-width: 100%;
+}
+
+html {
+  overscroll-behavior-x: none;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
   background: #0f1014;
@@ -12,6 +22,7 @@ body {
 }
 
 .screen {
+  width: 100%;
   max-width: 520px;
   margin: 0 auto;
   padding: 24px 16px 60px;
@@ -131,6 +142,7 @@ button:disabled {
   border-radius: 14px;
   padding: 16px;
   margin-top: 14px;
+  max-width: 100%;
 }
 
 .room-head {
@@ -142,6 +154,7 @@ button:disabled {
 .head-btns {
   display: flex;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 button.danger {
@@ -150,6 +163,10 @@ button.danger {
 }
 
 .room-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 18px;
 }
 
@@ -209,6 +226,19 @@ input[type="range"] {
   margin-bottom: 10px;
 }
 
+.card-head > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-head > div {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .search-row {
   margin-bottom: 10px;
 }
@@ -242,6 +272,7 @@ input[type="range"] {
 
 .lib-name {
   flex: 1;
+  min-width: 0;
   font-size: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -305,6 +336,7 @@ input[type="range"] {
 
 .track-name {
   flex: 1;
+  min-width: 0;
   font-size: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -312,6 +344,7 @@ input[type="range"] {
 }
 
 .track-meta {
+  flex-shrink: 0;
   color: #8a8f9c;
   font-size: 12px;
 }
@@ -369,6 +402,7 @@ input[type="range"] {
 }
 
 #unlock .box {
+  max-width: calc(100vw - 32px);
   text-align: center;
   padding: 32px 44px;
   border: 1px solid #2a2d37;
