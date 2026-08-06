@@ -226,6 +226,8 @@ function createRoom(name, ws, nickname) {
     currentIndex: -1,
     playing: false,
     playMode: 'order', // order=顺序 shuffle=随机 single=单曲循环
+    lastEndedAt: 0,
+    lastEndedTrackId: '',
     positionMs: 0,
     updatedAt: Date.now(),
   };
@@ -324,9 +326,18 @@ function handleControl(room, msg) {
       room.positionMs = 0;
       room.updatedAt = now;
       break;
-    case 'ended':
+    case 'ended': {
       // 歌曲自然播完：按播放模式决定下一首
       if (room.playlist.length === 0) return;
+      const currentTrack = room.playlist[room.currentIndex];
+      const reported = String(msg.trackId || '');
+      // 客户端上报的必须是当前正在播的歌；迟到的旧信号直接忽略
+      if (reported && currentTrack && reported !== currentTrack.id) return;
+      const key = reported || (currentTrack && currentTrack.id) || '';
+      // 同一首歌 10 秒内只处理一次，防止多个设备重复上报导致连切
+      if (room.lastEndedTrackId === key && now - room.lastEndedAt < 10000) return;
+      room.lastEndedTrackId = key;
+      room.lastEndedAt = now;
       if (room.playMode === 'single') {
         // 单曲循环：停在同一首重新播
         room.positionMs = 0;
@@ -337,6 +348,7 @@ function handleControl(room, msg) {
         room.updatedAt = now;
       }
       break;
+    }
     case 'set_mode': {
       const mode = String(msg.mode || '');
       if (mode !== 'order' && mode !== 'shuffle' && mode !== 'single') return;

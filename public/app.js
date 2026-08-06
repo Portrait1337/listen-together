@@ -46,6 +46,7 @@ let initialSeekDone = false; // 进房/换歌时是否已经在播放前跳到�
 let pendingPlay = false; // 对齐完成后需要继续播放
 let alignWatchUntil = 0; // 对齐观察期截止时间
 let lastAlignSeekAt = 0; // 上次自动跳转的时间，用于限制播放中反复跳转
+let lastSeekAt = 0; // 上次任何跳转的时间，用于识别“跳转造成的假播完”
 let creatingRoom = false;
 let dragging = false;
 let enteredRoom = false;
@@ -198,10 +199,16 @@ function targetPosition() {
 
 function alignTo(targetMs, force) {
   if (!Number.isFinite(targetMs) || targetMs < 0) return;
+  const durMs = (audio.duration || 0) * 1000;
+  if (durMs > 0) {
+    // 不允许跳到结尾之后；接近结尾时最多到结尾前 2 秒，避免一跳就触发“播完”
+    targetMs = Math.min(targetMs, Math.max(0, durMs - 2000));
+  }
   const diff = Math.abs(audio.currentTime * 1000 - targetMs);
   if (force || diff > 600) {
     try {
       audio.currentTime = targetMs / 1000;
+      lastSeekAt = Date.now();
     } catch {}
   }
 }
@@ -332,7 +339,14 @@ audio.addEventListener('timeupdate', () => {
 });
 
 audio.addEventListener('ended', () => {
-  if (state && state.playing) send({ type: 'control', action: 'ended' });
+  if (!state || !state.playing) return;
+  // 跳转/对齐刚结束（1.5 秒内）触发的假“播完”不上报
+  if (Date.now() - lastSeekAt < 1500) return;
+  // 只有确实播到结尾附近才算自然播完
+  const dur = audio.duration;
+  if (!(dur > 0) || Math.abs(audio.currentTime - dur) > 0.5) return;
+  const track = state.playlist[state.currentIndex];
+  send({ type: 'control', action: 'ended', trackId: track ? track.id : '' });
 });
 
 // 每 2 秒检查播放状态；播放中不再自动跳转（Safari 反复跳转会导致声音断断续续）
@@ -807,6 +821,7 @@ function leaveRoom() {
   initialSeekDone = false;
   pendingPlay = false;
   alignWatchUntil = 0;
+  lastSeekAt = 0;
   state = null;
   members = [];
   enteredRoom = false;

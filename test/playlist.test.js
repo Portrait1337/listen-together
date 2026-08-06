@@ -208,7 +208,7 @@ test('删除不存在的歌曲不会影响歌单', async () => {
   await alice.close();
 });
 
-test('播放模式：顺序、随机、单曲循环', async () => {
+test('单曲循环模式：播完停在当前歌并重新开始', async () => {
   const alice = await connectClient();
   alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
   const created = await alice.waitForState((s) => s.code);
@@ -232,27 +232,111 @@ test('播放模式：顺序、随机、单曲循环', async () => {
   assert.equal(state.updatedAt, updatedBefore);
 
   // 单曲循环：播完仍停在当前歌，进度归零
-  const singleBefore = { currentIndex: state.currentIndex, updatedAt: state.updatedAt };
+  const singleBefore = state.currentIndex;
   alice.send({ type: 'control', action: 'ended' });
   state = await alice.waitForNextState();
-  assert.equal(state.currentIndex, singleBefore.currentIndex);
+  assert.equal(state.currentIndex, singleBefore);
   assert.equal(state.positionMs, 0);
+  assert.equal(state.playing, true);
 
-  // 顺序：播完切到下一首
-  alice.send({ type: 'control', action: 'set_mode', mode: 'order' });
-  state = await alice.waitForState((s) => s.playMode === 'order');
+  await alice.close();
+});
+
+test('顺序模式：播完切到下一首', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitForState((s) => s.code);
+  await uploadTrack(created.code, 'song1.wav');
+  await uploadTrack(created.code, 'song2.wav');
+  await alice.waitForState((s) => s.playlist.length === 2);
+  alice.send({ type: 'control', action: 'play' });
+  let state = await alice.waitForState((s) => s.playing === true);
   const orderBefore = state.currentIndex;
   alice.send({ type: 'control', action: 'ended' });
   state = await alice.waitForState((s) => s.currentIndex !== orderBefore);
   assert.equal(state.currentIndex, (orderBefore + 1) % 2);
+  await alice.close();
+});
 
-  // 随机：两首歌时播完必定切到另一首
+test('随机模式：播完切到另一首', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitForState((s) => s.code);
+  await uploadTrack(created.code, 'song1.wav');
+  await uploadTrack(created.code, 'song2.wav');
+  await alice.waitForState((s) => s.playlist.length === 2);
   alice.send({ type: 'control', action: 'set_mode', mode: 'shuffle' });
-  state = await alice.waitForState((s) => s.playMode === 'shuffle');
+  let state = await alice.waitForState((s) => s.playMode === 'shuffle');
+  alice.send({ type: 'control', action: 'play' });
+  state = await alice.waitForState((s) => s.playing === true);
   const shuffleBefore = state.currentIndex;
   alice.send({ type: 'control', action: 'ended' });
   state = await alice.waitForState((s) => s.currentIndex !== shuffleBefore);
   assert.equal(state.currentIndex, 1 - shuffleBefore);
+
+  await alice.close();
+});
+
+test('同一首歌的播完信号在 10 秒内只处理一次', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitForState((s) => s.code);
+
+  await uploadTrack(created.code, 'song.wav');
+  await alice.waitForState((s) => s.playlist.length === 1);
+  alice.send({ type: 'control', action: 'play' });
+  let state = await alice.waitForState((s) => s.playing === true);
+  const trackId = state.playlist[0].id;
+
+  // 第一次“播完”正常处理
+  alice.send({ type: 'control', action: 'ended', trackId });
+  state = await alice.waitForNextState();
+  const updatedAfterFirstEnded = state.updatedAt;
+  assert.equal(state.currentIndex, 0);
+  assert.equal(state.positionMs, 0);
+
+  // 稍等片刻后立刻再发一次同样的信号，应该被冷却拦下
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  alice.send({ type: 'control', action: 'ended', trackId });
+  alice.send({ type: 'request_state' });
+  state = await alice.waitForNextState();
+  assert.equal(state.updatedAt, updatedAfterFirstEnded);
+  assert.equal(state.positionMs, 0);
+  assert.equal(state.currentIndex, 0);
+
+  await alice.close();
+});
+
+test('迟到的旧歌“播完”信号不会切歌', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitForState((s) => s.code);
+
+  await uploadTrack(created.code, 'song1.wav');
+  await uploadTrack(created.code, 'song2.wav');
+  await alice.waitForState((s) => s.playlist.length === 2);
+  alice.send({ type: 'control', action: 'play' });
+  let state = await alice.waitForState((s) => s.playing === true);
+  const firstId = state.playlist[state.currentIndex].id;
+
+  // 正常播完第一首：切到第二首
+  alice.send({ type: 'control', action: 'ended', trackId: firstId });
+  state = await alice.waitForState((s) => s.currentIndex === 1);
+  const secondId = state.playlist[1].id;
+
+  // 再发第一首的迟到信号：应被忽略
+  alice.send({ type: 'control', action: 'ended', trackId: firstId });
+  alice.send({ type: 'request_state' });
+  state = await alice.waitForNextState();
+  assert.equal(state.currentIndex, 1);
+  assert.equal(state.playlist[1].id, secondId);
+
+  // 随便编一个编号：也应被忽略
+  alice.send({ type: 'control', action: 'ended', trackId: 'not-current' });
+  alice.send({ type: 'request_state' });
+  state = await alice.waitForNextState();
+  assert.equal(state.currentIndex, 1);
+  assert.equal(state.playlist[1].id, secondId);
 
   await alice.close();
 });
