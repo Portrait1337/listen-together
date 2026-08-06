@@ -3,6 +3,7 @@ const assert = require('node:assert');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const path = require('node:path');
+const http = require('node:http');
 const WebSocket = require('ws');
 
 const SERVER_PATH = path.join(__dirname, '..', 'server.js');
@@ -100,6 +101,58 @@ function connectClient() {
       resolve(client);
     });
     ws.on('error', reject);
+  });
+}
+
+// 发起一个"只传了一半就暂停"的上传请求，用来模拟上传进行中
+function startSlowUpload(port, code) {
+  return new Promise((resolve, reject) => {
+    const boundary = '----ltBoundary' + crypto.randomBytes(6).toString('hex');
+    const wav = Buffer.from(
+      'UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA',
+      'base64'
+    );
+    const head = Buffer.from(
+      `--${boundary}\r\n` +
+        'Content-Disposition: form-data; name="file"; filename="song.wav"\r\n' +
+        'Content-Type: audio/wav\r\n\r\n',
+      'utf8'
+    );
+    const tail = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
+    const total = head.length + wav.length + tail.length;
+    const req = http.request({
+      host: '127.0.0.1',
+      port,
+      path: `/api/upload?roomId=${encodeURIComponent(code)}`,
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': total,
+        Connection: 'close',
+      },
+    });
+    req.on('error', reject);
+
+    req.write(head);
+    req.write(wav.subarray(0, 10));
+
+    let finishResolve;
+    const finished = new Promise((resolveFinish) => {
+      finishResolve = resolveFinish;
+    });
+    req.on('response', (res) => {
+      let body = '';
+      res.on('data', (chunk) => (body += chunk));
+      res.on('end', () => finishResolve({ status: res.statusCode, body }));
+    });
+
+    resolve({
+      finish() {
+        req.write(wav.subarray(10));
+        req.end(tail);
+        return finished;
+      },
+    });
   });
 }
 
@@ -217,4 +270,40 @@ test('聊过天的房间断开后也不会被空房间计时销毁，而是等�
   const error = await carol.waitFor('error');
   assert.match(error.message, /房间不存在/);
   await carol.close();
+});
+
+test('空房间有人正在上传歌曲时不会被清理', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitFor('room_created');
+
+  // 上传只发了一半就暂停，此时断开唯一的连接
+  const upload = await startSlowUpload(PORT, created.code);
+  await alice.close();
+
+  // 已超过空房间的 150ms 清理时间，但上传没结束，房间必须还在
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const bob = await connectClient();
+  bob.send({ type: 'join_room', code: created.code, nickname: '小B' });
+  await bob.waitFor('state');
+  await bob.close();
+
+  // 完成上传，房间从此变成"加过歌"的房间
+  const result = await upload.finish();
+  assert.equal(result.status, 200);
+
+  // 再等一小段时间，确认房间仍按"加过歌"的规则保留
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const carol = await connectClient();
+  carol.send({ type: 'join_room', code: created.code, nickname: '小C' });
+  await carol.waitFor('state');
+  await carol.close();
+
+  // 超过活跃房间的 600ms 后才销毁
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  const dave = await connectClient();
+  dave.send({ type: 'join_room', code: created.code, nickname: '小D' });
+  const error = await dave.waitFor('error');
+  assert.match(error.message, /房间不存在/);
+  await dave.close();
 });

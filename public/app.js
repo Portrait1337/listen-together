@@ -443,7 +443,11 @@ ui.fileInput.addEventListener('change', async () => {
   ui.uploadBtn.disabled = true;
   ui.uploadBtn.textContent = '上传中…';
   try {
-    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    // 房间号放在网址里，服务端才能在文件开始传输的第一时间就知道要保护哪个房间
+    const res = await fetch('/api/upload?roomId=' + encodeURIComponent(roomCode), {
+      method: 'POST',
+      body: fd,
+    });
     const data = await res.json();
     if (!res.ok) alert(data.error || '上传失败');
   } catch {

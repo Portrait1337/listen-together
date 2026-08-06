@@ -46,8 +46,22 @@ app.use('/uploads', express.static(UPLOAD_DIR));
 app.use('/library', express.static(LIBRARY_DIR));
 app.use(express.json());
 
-app.post('/api/upload', upload.single('file'), (req, res) => {
-  const room = rooms.get(String(req.body.roomId || '').toUpperCase().trim());
+// 上传歌曲期间房间不清零：请求一开始就把房间标记为"正在上传"，
+// 这样即使上传者的连接恰好断掉，清理倒计时也会等上传结束再开始。
+app.post('/api/upload', (req, res, next) => {
+  const room = rooms.get(String(req.query.roomId || '').toUpperCase().trim());
+  if (room) {
+    room.activeUploads = (room.activeUploads || 0) + 1;
+    res.on('finish', () => {
+      room.activeUploads = Math.max(0, (room.activeUploads || 1) - 1);
+      if (room.members.size === 0) scheduleRoomDestroy(room);
+    });
+  }
+  next();
+}, upload.single('file'), (req, res) => {
+  const room = rooms.get(
+    String((req.body && req.body.roomId) || req.query.roomId || '').toUpperCase().trim()
+  );
   if (!room) {
     return res.status(404).json({ error: '房间不存在，请重新加入' });
   }
@@ -205,6 +219,7 @@ function createRoom(name, ws, nickname) {
     code: makeCode(),
     name: String(name || '一起听').trim().slice(0, 30) || '一起听',
     members: new Map(),
+    activeUploads: 0,
     playlist: [],
     chatHistory: [],
     currentIndex: -1,
@@ -227,6 +242,8 @@ function addMember(room, ws, nickname) {
 // - 播放过/加过歌/聊过天的房间：保留 3 分钟等人重连，防止网络闪断或手机锁屏后房间消失
 function scheduleRoomDestroy(room) {
   clearTimeout(roomTimers.get(room.code));
+  // 有人正在上传歌曲时先不清理，等上传结束再重新计时
+  if (room.activeUploads > 0) return;
   const used = room.playlist.length > 0 || room.chatHistory.length > 0;
   const ttl = used ? ACTIVE_ROOM_TTL : EMPTY_ROOM_TTL;
   roomTimers.set(
