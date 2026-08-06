@@ -9,6 +9,7 @@ const { WebSocketServer, WebSocket } = require('ws');
 const PORT = process.env.PORT || 3000;
 const MAX_UPLOAD = 200 * 1024 * 1024; // 200MB
 const EMPTY_ROOM_TTL = Number(process.env.EMPTY_ROOM_TTL_MS) || 3 * 60 * 1000; // 空房间 3 分钟后销毁
+const ACTIVE_ROOM_TTL = Number(process.env.ACTIVE_ROOM_TTL_MS) || 30 * 60 * 1000; // 播放过的房间 30 分钟后销毁
 const AUDIO_EXTS = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus', '.wma', '.amr'];
 
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
@@ -221,17 +222,26 @@ function addMember(room, ws, nickname) {
   clearTimeout(roomTimers.get(room.code));
 }
 
+// 没人连接时按房间类型安排销毁：
+// - 还没加过歌的房间：3 分钟后销毁，避免垃圾房间占内存
+// - 播放过/加过歌的房间：保留 30 分钟等人重连，防止网络闪断或手机锁屏后房间消失
+function scheduleRoomDestroy(room) {
+  clearTimeout(roomTimers.get(room.code));
+  const ttl = room.playlist.length > 0 ? ACTIVE_ROOM_TTL : EMPTY_ROOM_TTL;
+  roomTimers.set(
+    room.code,
+    setTimeout(() => {
+      roomTimers.delete(room.code);
+      // 有人已经重新进房就不销毁
+      if (room.members.size === 0) rooms.delete(room.code);
+    }, ttl)
+  );
+}
+
 function removeMember(room, ws) {
   room.members.delete(ws);
   if (room.members.size === 0) {
-    clearTimeout(roomTimers.get(room.code));
-    roomTimers.set(
-      room.code,
-      setTimeout(() => {
-        rooms.delete(room.code);
-        roomTimers.delete(room.code);
-      }, EMPTY_ROOM_TTL)
-    );
+    scheduleRoomDestroy(room);
   }
 }
 
