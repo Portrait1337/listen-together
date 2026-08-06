@@ -56,12 +56,18 @@ function connectClient() {
     const waiters = [];
     ws.on('message', (raw) => {
       const msg = JSON.parse(raw.toString());
-      if (msg.type !== 'state') return;
-      latestState = msg;
-      const idx = waiters.findIndex((w) => w.pred(msg));
+      if (msg.type === 'state') {
+        latestState = msg;
+      } else if (msg.type === 'mode_changed') {
+        // 切模式不再广播完整状态，合并到最新状态里，方便测试等待
+        latestState = latestState ? { ...latestState, playMode: msg.playMode } : { playMode: msg.playMode };
+      } else {
+        return;
+      }
+      const idx = waiters.findIndex((w) => w.pred(latestState));
       if (idx >= 0) {
         const [waiter] = waiters.splice(idx, 1);
-        waiter.resolve(msg);
+        waiter.resolve(latestState);
       }
     });
     ws.on('open', () => {
@@ -214,10 +220,18 @@ test('播放模式：顺序、随机、单曲循环', async () => {
   alice.send({ type: 'control', action: 'play' });
   let state = await alice.waitForState((s) => s.playing === true);
   assert.equal(state.playMode, 'order');
+  const playingBefore = state.playing;
+  const positionBefore = state.positionMs;
+  const updatedBefore = state.updatedAt;
 
-  // 单曲循环：播完仍停在当前歌，进度归零
+  // 切换模式本身不能改变播放状态，也不能动进度锚点
   alice.send({ type: 'control', action: 'set_mode', mode: 'single' });
   state = await alice.waitForState((s) => s.playMode === 'single');
+  assert.equal(state.playing, playingBefore);
+  assert.equal(state.positionMs, positionBefore);
+  assert.equal(state.updatedAt, updatedBefore);
+
+  // 单曲循环：播完仍停在当前歌，进度归零
   const singleBefore = { currentIndex: state.currentIndex, updatedAt: state.updatedAt };
   alice.send({ type: 'control', action: 'ended' });
   state = await alice.waitForNextState();

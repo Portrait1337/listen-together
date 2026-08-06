@@ -160,6 +160,11 @@ function handleMessage(d) {
       renderNowPlaying();
       applyTrackAndSync();
       break;
+    case 'mode_changed':
+      // 只更新模式按钮，不触碰播放器，切换模式不会暂停当前歌曲
+      if (state) state.playMode = d.playMode;
+      renderMode();
+      break;
     case 'members':
     case 'member_joined':
     case 'member_left':

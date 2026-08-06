@@ -341,7 +341,6 @@ function handleControl(room, msg) {
       const mode = String(msg.mode || '');
       if (mode !== 'order' && mode !== 'shuffle' && mode !== 'single') return;
       room.playMode = mode;
-      room.updatedAt = now;
       break;
     }
     case 'select': {
@@ -404,7 +403,12 @@ wss.on('connection', (ws) => {
       case 'control':
         if (!room) return;
         handleControl(room, msg);
-        broadcast(room, snapshot(room));
+        if (msg.action === 'set_mode') {
+          // 切换模式是纯设置：不改变当前播放进度，单独广播避免触发播放器对齐/播放逻辑
+          broadcast(room, { type: 'mode_changed', playMode: room.playMode });
+        } else {
+          broadcast(room, snapshot(room));
+        }
         break;
 
       case 'remove_track':
