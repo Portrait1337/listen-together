@@ -9,9 +9,12 @@ const { WebSocketServer, WebSocket } = require('ws');
 const PORT = process.env.PORT || 3000;
 const MAX_UPLOAD = 200 * 1024 * 1024; // 200MB
 const EMPTY_ROOM_TTL = 30 * 60 * 1000; // 空房间 30 分钟后销毁
+const AUDIO_EXTS = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus', '.wma', '.amr'];
 
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
+const LIBRARY_DIR = path.join(__dirname, 'library');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+fs.mkdirSync(LIBRARY_DIR, { recursive: true });
 
 const app = express();
 const server = http.createServer(app);
@@ -31,7 +34,6 @@ const upload = multer({
   limits: { fileSize: MAX_UPLOAD },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname || '').toLowerCase();
-    const AUDIO_EXTS = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus', '.wma', '.amr'];
     if (file.mimetype && file.mimetype.startsWith('audio/')) return cb(null, true);
     if (AUDIO_EXTS.includes(ext)) return cb(null, true); // m4a 等文件类型标识不标准时，按扩展名放行
     cb(new Error('只支持音频文件'));
@@ -40,6 +42,8 @@ const upload = multer({
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/uploads', express.static(UPLOAD_DIR));
+app.use('/library', express.static(LIBRARY_DIR));
+app.use(express.json());
 
 app.post('/api/upload', upload.single('file'), (req, res) => {
   const room = rooms.get(String(req.body.roomId || '').toUpperCase().trim());
@@ -52,6 +56,90 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
     url: '/uploads/' + req.file.filename,
     size: req.file.size,
     uploader: String(req.body.nickname || '匿名').trim().slice(0, 20) || '匿名',
+  };
+  room.playlist.push(track);
+  if (room.currentIndex < 0) {
+    room.currentIndex = 0;
+    room.positionMs = 0;
+    room.updatedAt = Date.now();
+  }
+  broadcast(room, snapshot(room));
+  res.json({ ok: true, track });
+});
+
+// ---------- 本地曲库：搜索与添加 ----------
+function libraryUrl(relPath) {
+  return '/library/' + relPath.split('/').map(encodeURIComponent).join('/');
+}
+
+// 扫描曲库目录（含子文件夹），只收录音频文件
+function scanLibrary() {
+  const tracks = [];
+  const walk = (dir, prefix) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        walk(path.join(dir, entry.name), prefix ? prefix + '/' + entry.name : entry.name);
+      } else if (entry.isFile() && AUDIO_EXTS.includes(path.extname(entry.name).toLowerCase())) {
+        const rel = prefix ? prefix + '/' + entry.name : entry.name;
+        const full = path.join(dir, entry.name);
+        let size = 0;
+        try {
+          size = fs.statSync(full).size;
+        } catch {}
+        tracks.push({ id: rel, name: entry.name, url: libraryUrl(rel), size, source: 'library' });
+      }
+    }
+  };
+  walk(LIBRARY_DIR, '');
+  return tracks;
+}
+
+// 根据曲库 id 校验并返回曲目，防止路径穿越
+function findLibraryTrack(trackId) {
+  const id = String(trackId || '').trim();
+  if (!id) return null;
+  const full = path.resolve(LIBRARY_DIR, id);
+  if (full !== LIBRARY_DIR && !full.startsWith(LIBRARY_DIR + path.sep)) return null;
+  let st;
+  try {
+    st = fs.statSync(full);
+  } catch {
+    return null;
+  }
+  if (!st.isFile()) return null;
+  if (!AUDIO_EXTS.includes(path.extname(full).toLowerCase())) return null;
+  return { id, name: path.basename(full), url: libraryUrl(id), size: st.size, source: 'library' };
+}
+
+app.get('/api/library/search', (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase().slice(0, 100);
+  const all = scanLibrary();
+  const results = q ? all.filter((t) => t.name.toLowerCase().includes(q)) : all;
+  res.json({ total: all.length, results: results.slice(0, 20) });
+});
+
+app.post('/api/library/add', (req, res) => {
+  const room = rooms.get(String(req.body.roomId || '').toUpperCase().trim());
+  if (!room) {
+    return res.status(404).json({ error: '房间不存在，请重新加入' });
+  }
+  const entry = findLibraryTrack(req.body.trackId);
+  if (!entry) {
+    return res.status(404).json({ error: '曲库里没有这首歌，请重新搜索' });
+  }
+  const track = {
+    id: crypto.randomBytes(6).toString('hex'),
+    name: entry.name,
+    url: entry.url,
+    size: entry.size,
+    uploader: String(req.body.nickname || '匿名').trim().slice(0, 20) || '匿名',
+    fromLibrary: true,
   };
   room.playlist.push(track);
   if (room.currentIndex < 0) {

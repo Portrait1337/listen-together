@@ -196,6 +196,58 @@ input[type="range"] {
   margin-bottom: 10px;
 }
 
+.search-row {
+  margin-bottom: 10px;
+}
+
+.search-row input {
+  margin: 0;
+  font-size: 14px;
+  padding: 10px 12px;
+}
+
+.library-results {
+  background: #101218;
+  border-radius: 10px;
+  padding: 6px;
+  margin-bottom: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.lib-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+}
+
+.lib-row:hover {
+  background: #1e212c;
+}
+
+.lib-name {
+  flex: 1;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lib-row button {
+  padding: 5px 10px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.lib-note {
+  color: #8a8f9c;
+  font-size: 13px;
+  padding: 8px;
+  text-align: center;
+}
+
 .playlist {
   max-height: 240px;
   overflow-y: auto;

@@ -21,6 +21,8 @@ const ui = {
   seek: $('seek'),
   timeLabel: $('timeLabel'),
   playlist: $('playlist'),
+  librarySearch: $('librarySearch'),
+  libraryResults: $('libraryResults'),
   fileInput: $('fileInput'),
   uploadBtn: $('uploadBtn'),
   chatList: $('chatList'),
@@ -45,6 +47,9 @@ let dragging = false;
 let enteredRoom = false;
 let leftRoom = false;
 let autoJoinTimer = null;
+let libraryTimer = null;
+let librarySeq = 0;
+let libraryComposing = false;
 
 // ---------- 连接 ----------
 function send(obj) {
@@ -247,7 +252,7 @@ function renderPlaylist() {
     name.textContent = t.name;
     const meta = document.createElement('span');
     meta.className = 'track-meta';
-    meta.textContent = t.uploader;
+    meta.textContent = t.fromLibrary ? '曲库 · ' + t.uploader : t.uploader;
     item.append(play, name, meta);
     ui.playlist.append(item);
   });
@@ -257,7 +262,9 @@ function renderNowPlaying() {
   const track = state?.playlist[state?.currentIndex];
   if (track) {
     ui.nowPlaying.textContent = track.name;
-    ui.nowUploader.textContent = '由 ' + track.uploader + ' 上传';
+    ui.nowUploader.textContent = track.fromLibrary
+      ? '由 ' + track.uploader + ' 从曲库添加'
+      : '由 ' + track.uploader + ' 上传';
   } else {
     ui.nowPlaying.textContent = '还没有音频';
     ui.nowUploader.textContent = '上传一段音频，大家就能一起听了';
@@ -347,6 +354,109 @@ ui.fileInput.addEventListener('change', async () => {
     ui.uploadBtn.disabled = false;
     ui.uploadBtn.textContent = '上传音频';
     ui.fileInput.value = '';
+  }
+});
+
+// ---------- 本地曲库：搜索与添加 ----------
+function scheduleLibrarySearch() {
+  clearTimeout(libraryTimer);
+  libraryTimer = setTimeout(searchLibrary, 250);
+}
+
+async function searchLibrary() {
+  const q = ui.librarySearch.value.trim();
+  const seq = ++librarySeq;
+  clearTimeout(libraryTimer);
+  if (!q) {
+    ui.libraryResults.classList.add('hidden');
+    ui.libraryResults.innerHTML = '';
+    return;
+  }
+  ui.libraryResults.classList.remove('hidden');
+  ui.libraryResults.innerHTML = '<div class="lib-note">搜索中…</div>';
+  try {
+    const res = await fetch('/api/library/search?q=' + encodeURIComponent(q));
+    const data = await res.json();
+    if (seq !== librarySeq) return; // 丢弃过期结果
+    if (!res.ok) throw new Error(data.error || '搜索失败');
+    renderLibraryResults(data.results || [], data.total || 0);
+  } catch {
+    if (seq === librarySeq) {
+      ui.libraryResults.innerHTML = '<div class="lib-note">搜索失败，请稍后重试</div>';
+    }
+  }
+}
+
+function renderLibraryResults(results, total) {
+  ui.libraryResults.innerHTML = '';
+  if (total === 0) {
+    const note = document.createElement('div');
+    note.className = 'lib-note';
+    note.textContent = '曲库还是空的：把音频文件放进项目的 library 文件夹';
+    ui.libraryResults.append(note);
+    return;
+  }
+  if (results.length === 0) {
+    const note = document.createElement('div');
+    note.className = 'lib-note';
+    note.textContent = '曲库里没有匹配的音乐';
+    ui.libraryResults.append(note);
+    return;
+  }
+  results.forEach((t) => {
+    const row = document.createElement('div');
+    row.className = 'lib-row';
+    const name = document.createElement('span');
+    name.className = 'lib-name';
+    name.textContent = t.name;
+    name.title = t.name;
+    const add = document.createElement('button');
+    add.className = 'small';
+    add.textContent = '+ 添加';
+    add.addEventListener('click', () => addLibraryTrack(t, add));
+    row.append(name, add);
+    ui.libraryResults.append(row);
+  });
+}
+
+async function addLibraryTrack(track, btn) {
+  if (!roomCode) return;
+  btn.disabled = true;
+  btn.textContent = '添加中…';
+  try {
+    const res = await fetch('/api/library/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomId: roomCode, trackId: track.id, nickname }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '添加失败');
+    btn.textContent = '✓ 已添加';
+  } catch (e) {
+    btn.textContent = e.message || '添加失败';
+  }
+  setTimeout(() => {
+    btn.disabled = false;
+    btn.textContent = '+ 添加';
+  }, 1500);
+}
+
+ui.librarySearch.addEventListener('compositionstart', () => {
+  libraryComposing = true;
+});
+ui.librarySearch.addEventListener('compositionend', () => {
+  libraryComposing = false;
+  scheduleLibrarySearch();
+});
+ui.librarySearch.addEventListener('input', () => {
+  if (libraryComposing) return;
+  scheduleLibrarySearch();
+});
+ui.librarySearch.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !libraryComposing && !e.isComposing && e.keyCode !== 229) {
+    e.preventDefault();
+    clearTimeout(libraryTimer);
+    searchLibrary();
   }
 });
 
@@ -483,6 +593,9 @@ function leaveRoom() {
   enteredRoom = false;
   roomCode = null;
   creatingRoom = false;
+  ui.librarySearch.value = '';
+  ui.libraryResults.classList.add('hidden');
+  ui.libraryResults.innerHTML = '';
   ui.unlock.classList.add('hidden');
   ui.roomCodeInput.value = '';
   updateCreateBtn();
