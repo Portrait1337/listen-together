@@ -40,7 +40,6 @@ let nickname = '';
 let state = null;
 let members = [];
 let offset = 0; // 估算的服务器时间 - 本地时间
-let pendingAlign = null;
 let reconnectTimer = null;
 let creatingRoom = false;
 let dragging = false;
@@ -119,6 +118,26 @@ function estimateOffset() {
   });
 }
 
+// 周期性校准服务器时间，防止长时间播放后偏移
+setInterval(() => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const t1 = Date.now();
+  const onMsg = (ev) => {
+    let d;
+    try {
+      d = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
+    if (d.type === 'pong' && d.t1 === t1) {
+      ws.removeEventListener('message', onMsg);
+      offset = d.serverTime - (t1 + Date.now()) / 2;
+    }
+  };
+  ws.addEventListener('message', onMsg);
+  send({ type: 'ping', t1 });
+}, 15000);
+
 // ---------- 消息处理 ----------
 function handleMessage(d) {
   switch (d.type) {
@@ -128,6 +147,9 @@ function handleMessage(d) {
       break;
     case 'state':
       state = d;
+      if (offset === 0 && typeof d.serverTime === 'number') {
+        offset = d.serverTime - Date.now(); // 初始校准失败时用状态消息兜底
+      }
       enterRoom(); // 加入者第一次收到房间状态时，切换到房间界面
       renderPlaylist();
       renderNowPlaying();
@@ -163,7 +185,7 @@ function targetPosition() {
 function alignTo(targetMs, force) {
   if (!Number.isFinite(targetMs) || targetMs < 0) return;
   const diff = Math.abs(audio.currentTime * 1000 - targetMs);
-  if (force || diff > 1200) {
+  if (force || diff > 600) {
     try {
       audio.currentTime = targetMs / 1000;
     } catch {}
@@ -183,7 +205,6 @@ function applyTrackAndSync(force) {
   const trackChanged = !audio.src || audio.src.indexOf(track.url) === -1;
   if (trackChanged) {
     audio.src = track.url;
-    pendingAlign = target;
     return; // 等 loadedmetadata 后再对齐
   }
   alignTo(target, force);
@@ -195,9 +216,12 @@ function applyTrackAndSync(force) {
 }
 
 audio.addEventListener('loadedmetadata', () => {
-  if (pendingAlign != null) {
-    alignTo(pendingAlign, true);
-    pendingAlign = null;
+  // 音频加载完成后按"当下"的服务器进度重新计算，避免用加载前的过期进度
+  if (state && state.playlist[state.currentIndex]) {
+    const cur = state.playlist[state.currentIndex];
+    if (audio.src.indexOf(cur.url) !== -1) {
+      alignTo(state.playing ? targetPosition() : state.positionMs, true);
+    }
   }
   renderTime();
   if (state && state.playing) safePlay();
@@ -213,13 +237,13 @@ audio.addEventListener('ended', () => {
   if (state && state.playing) send({ type: 'control', action: 'next' });
 });
 
-// 每 2.5 秒做一次漂移校正
+// 每 2 秒做一次漂移校正
 setInterval(() => {
   if (state && state.playing) {
     if (audio.paused) safePlay();
     else alignTo(targetPosition(), false);
   }
-}, 2500);
+}, 2000);
 
 // ---------- 控制 ----------
 function sendControl(action, extra) {
