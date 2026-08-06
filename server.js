@@ -8,7 +8,6 @@ const { WebSocketServer, WebSocket } = require('ws');
 
 const PORT = process.env.PORT || 3000;
 const MAX_UPLOAD = 200 * 1024 * 1024; // 200MB
-const EMPTY_ROOM_TTL = 30 * 60 * 1000; // 空房间 30 分钟后销毁
 const AUDIO_EXTS = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus', '.wma', '.amr'];
 
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
@@ -158,7 +157,6 @@ app.use((err, req, res, next) => {
 
 // ---------- 房间与实时同步 ----------
 const rooms = new Map();
-const roomTimers = new Map();
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 function makeCode() {
@@ -218,20 +216,12 @@ function createRoom(name, ws, nickname) {
 
 function addMember(room, ws, nickname) {
   room.members.set(ws, { nickname });
-  clearTimeout(roomTimers.get(room.code));
 }
 
 function removeMember(room, ws) {
   room.members.delete(ws);
   if (room.members.size === 0) {
-    clearTimeout(roomTimers.get(room.code));
-    roomTimers.set(
-      room.code,
-      setTimeout(() => {
-        rooms.delete(room.code);
-        roomTimers.delete(room.code);
-      }, EMPTY_ROOM_TTL)
-    );
+    rooms.delete(room.code);
   }
 }
 
