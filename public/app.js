@@ -44,6 +44,7 @@ let reconnectTimer = null;
 let needAlign = false; // 正在等音频数据就绪后对齐进度
 let pendingPlay = false; // 对齐完成后需要继续播放
 let alignWatchUntil = 0; // 对齐观察期截止时间
+let lastAlignSeekAt = 0; // 上次自动跳转的时间，用于限制播放中反复跳转
 let creatingRoom = false;
 let dragging = false;
 let enteredRoom = false;
@@ -250,8 +251,9 @@ audio.addEventListener('canplay', () => {
 
 // 播放真正开始后再跳转（移动端常见：播放前设置 currentTime 不生效）
 audio.addEventListener('playing', () => {
-  if (needAlign) {
+  if (needAlign && (lastAlignSeekAt === 0 || Date.now() - lastAlignSeekAt >= 10000)) {
     alignTo(state.playing ? targetPosition() : state.positionMs, true);
+    lastAlignSeekAt = Date.now();
   }
 });
 
@@ -273,11 +275,12 @@ audio.addEventListener('timeupdate', () => {
   if (needAlign && Date.now() < alignWatchUntil && state && state.playing) {
     const target = targetPosition();
     const diff = Math.abs(audio.currentTime * 1000 - target);
-    if (diff > 3000) {
-      alignTo(target, true);
-    } else if (diff <= 600) {
+    if (diff <= 3000) {
       needAlign = false;
       pendingPlay = false;
+    } else if (SyncPolicy.shouldAutoSeek(audio.currentTime * 1000, target, lastAlignSeekAt, Date.now())) {
+      alignTo(target, true);
+      lastAlignSeekAt = Date.now();
     }
   }
 });
@@ -286,12 +289,11 @@ audio.addEventListener('ended', () => {
   if (state && state.playing) send({ type: 'control', action: 'next' });
 });
 
-// 每 2 秒做一次漂移校正
+// 每 2 秒检查播放状态；播放中不再自动跳转（Safari 反复跳转会导致声音断断续续）
 setInterval(() => {
   if (state && state.playing) {
     if (needAlign && Date.now() < alignWatchUntil) return; // 对齐进行中，避免从 0 抢先播放
     if (audio.paused) safePlay();
-    else alignTo(targetPosition(), false);
   }
 }, 2000);
 
