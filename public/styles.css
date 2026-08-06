@@ -73,6 +73,19 @@ button.small {
   font-size: 13px;
 }
 
+#modeBtn {
+  background: #262a35;
+  color: #9aa5ff;
+}
+
+#modeBtn.mode-shuffle {
+  color: #ffcc00;
+}
+
+#modeBtn.mode-single {
+  color: #6ee7b7;
+}
+
 button.icon {
   background: #262a35;
   border-radius: 50%;

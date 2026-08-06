@@ -354,7 +354,21 @@ ui.nextBtn.addEventListener('click', () => sendControl('next'));
 // ---------- 播放模式 ----------
 const MODE_LABELS = { order: '顺序', shuffle: '随机', single: '单曲循环' };
 function renderMode() {
-  ui.modeBtn.textContent = MODE_LABELS[state?.playMode || 'order'] || '顺序';
+  const mode = state?.playMode || 'order';
+  const label = MODE_LABELS[mode] || '顺序';
+  const btn = ui.modeBtn;
+  if (!btn) return;
+  // 微信内置浏览器偶发只改了数据、屏幕上文字不刷新，
+  // 所以放到点击事件结束后刷新，并强制重绘一次
+  requestAnimationFrame(() => {
+    btn.textContent = label;
+    btn.classList.remove('mode-order', 'mode-shuffle', 'mode-single');
+    btn.classList.add('mode-' + mode);
+    const prev = btn.style.display;
+    btn.style.display = 'none';
+    void btn.offsetHeight;
+    btn.style.display = prev;
+  });
 }
 ui.modeBtn.addEventListener('click', () => {
   const cur = state?.playMode || 'order';
