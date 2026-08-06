@@ -193,3 +193,28 @@ test('播放过的房间断开后不会被空房间计时销毁，而是等更�
   assert.match(error.message, /房间不存在/);
   await carol.close();
 });
+
+test('聊过天的房间断开后也不会被空房间计时销毁，而是等更久', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitFor('room_created');
+
+  alice.send({ type: 'chat', text: '大家好' });
+  await alice.waitFor('chat');
+  await alice.close();
+
+  // 已超过空房间的 150ms，聊过天的房间应保留
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const bob = await connectClient();
+  bob.send({ type: 'join_room', code: created.code, nickname: '小B' });
+  await bob.waitFor('state');
+  await bob.close();
+
+  // 超过播放过房间的 600ms 后才销毁
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  const carol = await connectClient();
+  carol.send({ type: 'join_room', code: created.code, nickname: '小C' });
+  const error = await carol.waitFor('error');
+  assert.match(error.message, /房间不存在/);
+  await carol.close();
+});
