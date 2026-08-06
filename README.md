@@ -54,4 +54,3 @@ cloudflared tunnel --url http://localhost:3000
 - 对象存储 + CDN，音频独立存放
 - 部署到服务器并启用 HTTPS
 - 上传先做内容安全检测，通过后才可播
-- 数据持久化（数据库保存房间、歌单、播放历史）
