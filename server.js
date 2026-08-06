@@ -205,6 +205,7 @@ function createRoom(name, ws, nickname) {
     name: String(name || '一起听').trim().slice(0, 30) || '一起听',
     members: new Map(),
     playlist: [],
+    chatHistory: [],
     currentIndex: -1,
     playing: false,
     positionMs: 0,
@@ -326,6 +327,7 @@ wss.on('connection', (ws) => {
         nickname = cleanNick(msg.nickname);
         room = target;
         addMember(room, ws, nickname);
+        send({ type: 'chat_history', messages: room.chatHistory });
         send(snapshot(room));
         send({ type: 'members', members: membersList(room) });
         broadcast(room, { type: 'member_joined', nickname, members: membersList(room) });
@@ -342,7 +344,12 @@ wss.on('connection', (ws) => {
         if (!room) return;
         {
           const text = String(msg.text || '').trim().slice(0, 200);
-          if (text) broadcast(room, { type: 'chat', nickname, text, time: Date.now() });
+          if (text) {
+            const chat = { nickname, text, time: Date.now() };
+            room.chatHistory.push(chat);
+            if (room.chatHistory.length > 100) room.chatHistory.shift();
+            broadcast(room, { type: 'chat', ...chat });
+          }
         }
         break;
 

@@ -167,6 +167,10 @@ function handleMessage(d) {
     case 'chat':
       appendChat(d.nickname, d.text);
       break;
+    case 'chat_history':
+      ui.chatList.innerHTML = '';
+      (d.messages || []).forEach((m) => appendChat(m.nickname, m.text));
+      break;
     case 'error':
       ui.hint.textContent = d.message || '出错了';
       if (d.message && d.message.indexOf('房间不存在') >= 0) {
