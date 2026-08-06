@@ -213,6 +213,11 @@ function applyTrackAndSync(force) {
     alignWatchUntil = Date.now() + 20000;
     return; // 等数据就绪后再对齐
   }
+  if (needAlign) {
+    // 还在等音频数据就绪：只更新播放意图，不做跳转/播放，避免在加载阶段 seek
+    pendingPlay = state.playing;
+    return;
+  }
   needAlign = false;
   pendingPlay = false;
   alignWatchUntil = 0;
@@ -225,23 +230,21 @@ function applyTrackAndSync(force) {
 }
 
 audio.addEventListener('loadedmetadata', () => {
-  if (needAlign) {
-    alignTo(state.playing ? targetPosition() : state.positionMs, true);
-    renderTime();
-    if (pendingPlay || (state && state.playing)) safePlay();
-  }
+  // 注意：不要在 loadedmetadata 里设置 currentTime
+  // WebKit 已知 bug（261512）：会导致 iOS Safari 从 0 播放且之后无法再跳转
+  renderTime();
 });
 
-// 数据真正就绪后再对齐一次，确保跳转生效（慢网络下元数据就绪时可能还不可跳转）
+// 数据就绪后先开始播放；跳转统一等到 playing 事件（播放真正开始后）再做
 audio.addEventListener('canplay', () => {
   if (needAlign) {
-    alignTo(state.playing ? targetPosition() : state.positionMs, true);
+    // 数据就绪后先只开始播放，不在播放前 seek（iOS Safari 播放前跳转会从头播放）
     renderTime();
     if (state && state.playing) safePlay();
   }
 });
 
-// 播放真正开始后再跳转一次（移动端常见：播放前设置 currentTime 不生效）
+// 播放真正开始后再跳转（移动端常见：播放前设置 currentTime 不生效）
 audio.addEventListener('playing', () => {
   if (needAlign) {
     alignTo(state.playing ? targetPosition() : state.positionMs, true);
@@ -296,8 +299,9 @@ function sendControl(action, extra) {
 // 点击播放时在用户手势内立即本地播放，避免等服务端回包后再播放被浏览器拦截
 function playLocally() {
   if (!state || !state.playlist[state.currentIndex] || !audio.src) return;
+  needAlign = true;
   pendingPlay = true;
-  alignTo(targetPosition(), true);
+  alignWatchUntil = Date.now() + 20000;
   const p = audio.play();
   if (p) {
     p.catch((err) => {
@@ -580,7 +584,7 @@ ui.unlock.addEventListener('click', () => {
     pendingPlay = true;
     alignWatchUntil = Date.now() + 20000;
     const p = audio.play();
-    if (p) p.then(() => alignTo(targetPosition(), true)).catch(() => {});
+    if (p) p.catch(() => {});
   }
 });
 
