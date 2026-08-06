@@ -476,6 +476,14 @@ function safePlay() {
   }
 }
 
+// 用户点击"创建/加入"时用静音音频预解锁播放权限，让后续远程播放能直接出声
+function unlockAudio() {
+  try {
+    const silent = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA');
+    silent.play().catch(() => {});
+  } catch {}
+}
+
 ui.unlock.addEventListener('click', () => {
   ui.unlock.classList.add('hidden');
   if (state && state.playing && audio.src) {
@@ -497,7 +505,6 @@ function enterRoom() {
   ui.room.classList.remove('hidden');
   ui.roomCodeLabel.textContent = roomCode;
   ui.hint.textContent = '';
-  showUnlock();
 }
 
 ui.createBtn.addEventListener('click', () => {
@@ -513,6 +520,7 @@ ui.createBtn.addEventListener('click', () => {
   roomCode = null;
   leftRoom = false;
   clearTimeout(autoJoinTimer);
+  unlockAudio();
   connect();
 });
 
@@ -533,6 +541,7 @@ ui.joinBtn.addEventListener('click', () => {
   creatingRoom = false;
   leftRoom = false;
   clearTimeout(autoJoinTimer);
+  unlockAudio();
   connect();
 });
 
