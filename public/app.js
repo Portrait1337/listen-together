@@ -368,7 +368,17 @@ function renderPlaylist() {
     const meta = document.createElement('span');
     meta.className = 'track-meta';
     meta.textContent = t.fromLibrary ? '曲库 · ' + t.uploader : t.uploader;
-    item.append(play, name, meta);
+    const del = document.createElement('button');
+    del.className = 'track-del';
+    del.textContent = '删除';
+    del.setAttribute('aria-label', '删除 ' + t.name);
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (confirm('确定删除「' + t.name + '」吗？')) {
+        send({ type: 'remove_track', trackId: t.id });
+      }
+    });
+    item.append(play, name, meta, del);
     ui.playlist.append(item);
   });
 }

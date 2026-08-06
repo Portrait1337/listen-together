@@ -280,6 +280,16 @@ input[type="range"] {
   font-size: 14px;
 }
 
+.track .track-del {
+  color: #e05656;
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
+.track .track-del:hover {
+  color: #ff7b7b;
+}
+
 .track-name {
   flex: 1;
   font-size: 14px;

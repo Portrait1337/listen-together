@@ -368,6 +368,31 @@ wss.on('connection', (ws) => {
         broadcast(room, snapshot(room));
         break;
 
+      case 'remove_track':
+        if (!room) return;
+        {
+          const idx = room.playlist.findIndex((t) => t.id === String(msg.trackId || ''));
+          if (idx < 0) break;
+          room.playlist.splice(idx, 1);
+          if (room.playlist.length === 0) {
+            // 歌都删完了：停止播放并回到空状态
+            room.currentIndex = -1;
+            room.positionMs = 0;
+            room.playing = false;
+            room.updatedAt = Date.now();
+          } else if (idx < room.currentIndex) {
+            // 删掉的是当前歌之前的歌，当前序号前移一位
+            room.currentIndex -= 1;
+          } else if (idx === room.currentIndex) {
+            // 删掉的是正在播的歌：自动切到下一首继续播
+            if (room.currentIndex >= room.playlist.length) room.currentIndex = 0;
+            room.positionMs = 0;
+            room.updatedAt = Date.now();
+          }
+          broadcast(room, snapshot(room));
+        }
+        break;
+
       case 'chat':
         if (!room) return;
         {
