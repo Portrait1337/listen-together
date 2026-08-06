@@ -226,7 +226,28 @@ function sendControl(action, extra) {
   send({ type: 'control', action, ...(extra || {}) });
 }
 
-ui.playBtn.addEventListener('click', () => sendControl(state && state.playing ? 'pause' : 'play'));
+// 点击播放时在用户手势内立即本地播放，避免等服务端回包后再播放被浏览器拦截
+function playLocally() {
+  if (!state || !state.playlist[state.currentIndex] || !audio.src) return;
+  alignTo(targetPosition(), true);
+  const p = audio.play();
+  if (p) {
+    p.catch((err) => {
+      if (err && err.name === 'AbortError') return;
+      showUnlock();
+    });
+  }
+}
+
+ui.playBtn.addEventListener('click', () => {
+  if (state && state.playing) {
+    audio.pause();
+    sendControl('pause');
+  } else {
+    playLocally();
+    sendControl('play');
+  }
+});
 ui.prevBtn.addEventListener('click', () => sendControl('prev'));
 ui.nextBtn.addEventListener('click', () => sendControl('next'));
 ui.seek.addEventListener('input', () => {
