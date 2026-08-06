@@ -14,7 +14,11 @@ const clients = [];
 function startServer() {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [SERVER_PATH], {
-      env: { ...process.env, PORT: String(PORT) },
+      env: {
+        ...process.env,
+        PORT: String(PORT),
+        EMPTY_ROOM_TTL_MS: '150',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -107,7 +111,7 @@ after(() => {
   if (serverProcess) serverProcess.kill();
 });
 
-test('最后一个成员退出后房间立即销毁', async () => {
+test('房间在最后一个人退出后延迟销毁', async () => {
   const alice = await connectClient();
   alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
   const created = await alice.waitFor('room_created');
@@ -119,9 +123,18 @@ test('最后一个成员退出后房间立即销毁', async () => {
   await alice.close();
   await bob.close();
 
+  // 未到销毁时间时仍可加入（证明不是立即销毁）
   const carol = await connectClient();
   carol.send({ type: 'join_room', code: created.code, nickname: '小C' });
-  const error = await carol.waitFor('error');
-  assert.match(error.message, /房间不存在/);
+  await carol.waitFor('state');
   await carol.close();
+
+  // 超过销毁时间后房间不存在
+  await new Promise((resolve) => setTimeout(resolve, 400));
+
+  const dave = await connectClient();
+  dave.send({ type: 'join_room', code: created.code, nickname: '小D' });
+  const error = await dave.waitFor('error');
+  assert.match(error.message, /房间不存在/);
+  await dave.close();
 });
