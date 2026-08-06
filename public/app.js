@@ -225,6 +225,8 @@ function applyTrackAndSync() {
     initialSeekDone = false;
     pendingPlay = state.playing;
     alignWatchUntil = Date.now() + 20000;
+    // 边播边缓冲：不等数据就绪，先立即尝试播放，能出声就出声
+    if (state.playing) safePlay();
     return; // 等数据就绪后再对齐
   }
   if (needAlign) {
@@ -251,27 +253,51 @@ audio.addEventListener('loadedmetadata', () => {
   renderTime();
 });
 
-// 数据就绪后先在播放前跳到房间进度，再开始播放。
-// iOS 不能在 loadedmetadata 里跳（WebKit bug 261512），也不能在播放开始后再跳
-// （iPhone Chrome/Safari 会变成进度条在走但没有声音），所以统一在 loadeddata 时对齐。
+// 数据就绪后的处理（loadeddata / canplay）：
+// - 暂停中的房间：跳到房间进度，不播放
+// - 播放中的房间：如果还没开始出声就先播起来，等真的开始播放后再对齐
 function startAlignedPlayback() {
-  if (!needAlign) return;
-  if (!initialSeekDone) {
-    alignTo(state.playing ? targetPosition() : state.positionMs, true);
+  if (!needAlign || initialSeekDone) return;
+  if (state && !state.playing) {
     initialSeekDone = true;
-    lastAlignSeekAt = Date.now();
+    alignTo(state.positionMs, true);
+    needAlign = false;
+    pendingPlay = false;
+    renderTime();
+    return;
   }
-  renderTime();
-  // 正在跳转时先不播放，等 seeked 完成后由 seeked 处理，避免 iOS 播放中跳转丢声音
-  if (state && state.playing && !audio.seeking) safePlay();
+  if (state && state.playing && audio.paused && pendingPlay) {
+    safePlay(); // 边播边缓冲：先出声，别等数据全就绪
+  }
+}
+
+// 已经实际开始播放：先暂停跳到目标进度，再继续播
+function alignAfterStarted() {
+  if (!needAlign || initialSeekDone) return;
+  const target = state.playing ? targetPosition() : state.positionMs;
+  const diff = Math.abs(audio.currentTime * 1000 - target);
+  initialSeekDone = true;
+  lastAlignSeekAt = Date.now();
+  if (diff > 1500) {
+    // 先暂停、再跳转、等 seeked 后恢复播放：
+    // iOS 在播放中直接 seek 会变成进度在走但没有声音
+    audio.pause();
+    alignTo(target, true);
+  } else {
+    needAlign = false;
+    pendingPlay = false;
+    renderTime();
+  }
 }
 
 audio.addEventListener('loadeddata', startAlignedPlayback);
 audio.addEventListener('canplay', startAlignedPlayback);
 
-// 播放真正开始后不再跳转，避免 iOS 播放中 seek 导致没有声音
 audio.addEventListener('playing', () => {
-  if (needAlign) {
+  if (needAlign && !initialSeekDone) {
+    // 已经出声但还没对齐：先暂停跳到目标进度再继续播
+    alignAfterStarted();
+  } else if (needAlign) {
     needAlign = false;
     pendingPlay = false;
   }
@@ -665,11 +691,8 @@ function unlockAudio() {
 ui.unlock.addEventListener('click', () => {
   ui.unlock.classList.add('hidden');
   if (state && state.playing && audio.src) {
-    if (needAlign && !initialSeekDone) {
-      // 还在等音频就绪：等对齐完成后自动播放
-      pendingPlay = true;
-      return;
-    }
+    // 必须在这次点击里直接 play()，iPhone 才会真正放行声音；
+    // 之后对齐逻辑会在 playing 事件里自动跳到房间进度
     const p = audio.play();
     if (p) p.catch(() => {});
   }
