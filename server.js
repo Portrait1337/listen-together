@@ -196,6 +196,7 @@ function snapshot(room) {
     name: room.name,
     currentIndex: room.currentIndex,
     playing: room.playing,
+    playMode: room.playMode,
     positionMs: room.positionMs,
     updatedAt: room.updatedAt,
     serverTime: Date.now(),
@@ -224,6 +225,7 @@ function createRoom(name, ws, nickname) {
     chatHistory: [],
     currentIndex: -1,
     playing: false,
+    playMode: 'order', // order=顺序 shuffle=随机 single=单曲循环
     positionMs: 0,
     updatedAt: Date.now(),
   };
@@ -268,6 +270,23 @@ function cleanNick(n) {
   return s ? s.slice(0, 20) : '匿名';
 }
 
+function randomTrackIndex(room) {
+  if (room.playlist.length <= 1) return 0;
+  let i = crypto.randomInt(room.playlist.length);
+  if (i === room.currentIndex) i = (i + 1) % room.playlist.length;
+  return i;
+}
+
+function nextTrackIndex(room) {
+  if (room.playMode === 'shuffle') return randomTrackIndex(room);
+  return (room.currentIndex + 1) % room.playlist.length;
+}
+
+function prevTrackIndex(room) {
+  if (room.playMode === 'shuffle') return randomTrackIndex(room);
+  return (room.currentIndex - 1 + room.playlist.length) % room.playlist.length;
+}
+
 function handleControl(room, msg) {
   const now = Date.now();
   switch (msg.action) {
@@ -295,16 +314,36 @@ function handleControl(room, msg) {
     }
     case 'next':
       if (room.playlist.length === 0) return;
-      room.currentIndex = (room.currentIndex + 1) % room.playlist.length;
+      room.currentIndex = nextTrackIndex(room);
       room.positionMs = 0;
       room.updatedAt = now;
       break;
     case 'prev':
       if (room.playlist.length === 0) return;
-      room.currentIndex = (room.currentIndex - 1 + room.playlist.length) % room.playlist.length;
+      room.currentIndex = prevTrackIndex(room);
       room.positionMs = 0;
       room.updatedAt = now;
       break;
+    case 'ended':
+      // 歌曲自然播完：按播放模式决定下一首
+      if (room.playlist.length === 0) return;
+      if (room.playMode === 'single') {
+        // 单曲循环：停在同一首重新播
+        room.positionMs = 0;
+        room.updatedAt = now;
+      } else {
+        room.currentIndex = nextTrackIndex(room);
+        room.positionMs = 0;
+        room.updatedAt = now;
+      }
+      break;
+    case 'set_mode': {
+      const mode = String(msg.mode || '');
+      if (mode !== 'order' && mode !== 'shuffle' && mode !== 'single') return;
+      room.playMode = mode;
+      room.updatedAt = now;
+      break;
+    }
     case 'select': {
       const idx = Number(msg.index);
       if (!Number.isInteger(idx) || idx < 0 || idx >= room.playlist.length) return;

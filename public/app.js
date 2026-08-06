@@ -25,6 +25,7 @@ const ui = {
   libraryResults: $('libraryResults'),
   fileInput: $('fileInput'),
   uploadBtn: $('uploadBtn'),
+  modeBtn: $('modeBtn'),
   chatList: $('chatList'),
   chatInput: $('chatInput'),
   chatSend: $('chatSend'),
@@ -300,7 +301,7 @@ audio.addEventListener('timeupdate', () => {
 });
 
 audio.addEventListener('ended', () => {
-  if (state && state.playing) send({ type: 'control', action: 'next' });
+  if (state && state.playing) send({ type: 'control', action: 'ended' });
 });
 
 // 每 2 秒检查播放状态；播放中不再自动跳转（Safari 反复跳转会导致声音断断续续）
@@ -344,6 +345,18 @@ ui.playBtn.addEventListener('click', () => {
 });
 ui.prevBtn.addEventListener('click', () => sendControl('prev'));
 ui.nextBtn.addEventListener('click', () => sendControl('next'));
+
+// ---------- 播放模式 ----------
+const MODE_LABELS = { order: '顺序', shuffle: '随机', single: '单曲循环' };
+function renderMode() {
+  ui.modeBtn.textContent = MODE_LABELS[state?.playMode || 'order'] || '顺序';
+}
+ui.modeBtn.addEventListener('click', () => {
+  const cur = state?.playMode || 'order';
+  const next = cur === 'order' ? 'shuffle' : cur === 'shuffle' ? 'single' : 'order';
+  sendControl('set_mode', { mode: next });
+});
+
 ui.seek.addEventListener('input', () => {
   dragging = true;
   renderTime();
@@ -356,6 +369,7 @@ ui.seek.addEventListener('change', () => {
 // ---------- 渲染 ----------
 function renderPlaylist() {
   ui.playlist.innerHTML = '';
+  renderMode();
   (state?.playlist || []).forEach((t, i) => {
     const item = document.createElement('div');
     item.className = 'track' + (i === state.currentIndex ? ' active' : '');

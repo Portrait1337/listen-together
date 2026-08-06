@@ -87,6 +87,18 @@ function connectClient() {
             });
           });
         },
+        waitForNextState(timeout = 6000) {
+          return new Promise((resolveWait, rejectWait) => {
+            const timer = setTimeout(() => rejectWait(new Error('等待下一条状态超时')), timeout);
+            waiters.push({
+              pred: () => true,
+              resolve: (msg) => {
+                clearTimeout(timer);
+                resolveWait(msg);
+              },
+            });
+          });
+        },
         close() {
           return new Promise((done) => {
             if (ws.readyState === WebSocket.CLOSED) return done();
@@ -186,6 +198,47 @@ test('删除不存在的歌曲不会影响歌单', async () => {
   alice.send({ type: 'control', action: 'play' });
   const state = await alice.waitForState((s) => s.playing === true);
   assert.equal(state.playlist.length, 1);
+
+  await alice.close();
+});
+
+test('播放模式：顺序、随机、单曲循环', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitForState((s) => s.code);
+
+  await uploadTrack(created.code, 'song1.wav');
+  await uploadTrack(created.code, 'song2.wav');
+  await alice.waitForState((s) => s.playlist.length === 2);
+
+  alice.send({ type: 'control', action: 'play' });
+  let state = await alice.waitForState((s) => s.playing === true);
+  assert.equal(state.playMode, 'order');
+
+  // 单曲循环：播完仍停在当前歌，进度归零
+  alice.send({ type: 'control', action: 'set_mode', mode: 'single' });
+  state = await alice.waitForState((s) => s.playMode === 'single');
+  const singleBefore = { currentIndex: state.currentIndex, updatedAt: state.updatedAt };
+  alice.send({ type: 'control', action: 'ended' });
+  state = await alice.waitForNextState();
+  assert.equal(state.currentIndex, singleBefore.currentIndex);
+  assert.equal(state.positionMs, 0);
+
+  // 顺序：播完切到下一首
+  alice.send({ type: 'control', action: 'set_mode', mode: 'order' });
+  state = await alice.waitForState((s) => s.playMode === 'order');
+  const orderBefore = state.currentIndex;
+  alice.send({ type: 'control', action: 'ended' });
+  state = await alice.waitForState((s) => s.currentIndex !== orderBefore);
+  assert.equal(state.currentIndex, (orderBefore + 1) % 2);
+
+  // 随机：两首歌时播完必定切到另一首
+  alice.send({ type: 'control', action: 'set_mode', mode: 'shuffle' });
+  state = await alice.waitForState((s) => s.playMode === 'shuffle');
+  const shuffleBefore = state.currentIndex;
+  alice.send({ type: 'control', action: 'ended' });
+  state = await alice.waitForState((s) => s.currentIndex !== shuffleBefore);
+  assert.equal(state.currentIndex, 1 - shuffleBefore);
 
   await alice.close();
 });
