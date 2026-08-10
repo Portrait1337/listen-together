@@ -335,6 +335,19 @@ input[type="range"] {
   text-align: center;
 }
 
+.load-more {
+  width: 100%;
+  margin-top: 8px;
+  padding: 9px 0;
+  background: #1e212c;
+  color: #9aa5ff;
+  font-size: 13px;
+}
+
+.load-more:disabled {
+  opacity: 0.5;
+}
+
 .playlist {
   max-height: 240px;
   overflow-y: auto;

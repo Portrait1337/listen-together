@@ -31,6 +31,9 @@ const ONLINE_CACHE_TTL_MS = Number(process.env.ONLINE_CACHE_TTL_MS) || 60000;
 const ONLINE_RATE_WINDOW_MS = Number(process.env.ONLINE_RATE_WINDOW_MS) || 10000;
 const ONLINE_RATE_MAX = Number(process.env.ONLINE_RATE_MAX) || 10;
 const ONLINE_VIP_CACHE_TTL_MS = 10 * 60 * 1000; // 会员播放地址缓存 10 分钟（CDN 地址约 20 分钟有效）
+const ONLINE_MAX_CONCURRENT_DOWNLOADS = Number(process.env.ONLINE_MAX_CONCURRENT_DOWNLOADS) || 3; // 在线歌曲并发下载数上限，防带宽/连接被刷爆
+const ONLINE_FILE_TTL_MS = Number(process.env.ONLINE_FILE_TTL_MS) || 24 * 60 * 60 * 1000; // 在线下载文件无人引用 24 小时后清理（缓存性质，可重新下载）
+const ONLINE_CLEAN_INTERVAL_MS = Number(process.env.ONLINE_CLEAN_INTERVAL_MS) || 60 * 60 * 1000; // 在线下载文件清理间隔
 
 const app = express();
 // 只信任本机隧道（cpolar/cloudflared 都在本机跑）写入的 X-Forwarded-For：
@@ -118,6 +121,7 @@ function clientIp(req) {
 const onlineHits = new Map(); // ip -> [时间戳]
 const onlineCache = new Map(); // q -> { at, data }
 const onlineFiles = new Map(); // "provider:remoteId" -> 文件名
+let onlineDownloads = 0; // 当前进行中的在线下载数（并发上限用）
 const onlineVipCache = new Map(); // trackId -> { url, at }，会员播放地址短缓存
 let neteaseVip = { valid: false, nickname: '' }; // 会员登录状态，10 分钟刷新一次
 
@@ -187,6 +191,40 @@ function cleanupOrphanUploads() {
       const st = fs.statSync(full);
       if (!st.isFile() || now - st.mtimeMs < ORPHAN_UPLOAD_TTL) continue;
       fs.unlink(full, () => {});
+    } catch {}
+  }
+}
+
+// 清理无人引用的在线下载文件：在线歌曲是缓存性质（随时可重新下载），
+// 长时间没人引用就删掉，防止 library/online 无限增长占满磁盘。
+// 与上传文件不同：上传是用户数据，在线下载是派生缓存，清理可以更积极。
+function cleanupOrphanOnlineFiles() {
+  const referenced = new Set();
+  for (const room of rooms.values()) {
+    for (const t of room.playlist) {
+      if (typeof t.url === 'string' && t.url.startsWith('/library/online/')) {
+        referenced.add(decodeURIComponent(path.basename(t.url)));
+      }
+    }
+  }
+  let entries;
+  try {
+    entries = fs.readdirSync(ONLINE_DIR);
+  } catch {
+    return;
+  }
+  const now = Date.now();
+  for (const name of entries) {
+    if (referenced.has(name)) continue;
+    const full = path.join(ONLINE_DIR, name);
+    try {
+      const st = fs.statSync(full);
+      if (!st.isFile() || now - st.mtimeMs < ONLINE_FILE_TTL_MS) continue;
+      fs.unlink(full, () => {});
+      // 磁盘文件删了，内存缓存同步失效，避免缓存指向已删文件
+      for (const [key, fname] of onlineFiles) {
+        if (fname === name) onlineFiles.delete(key);
+      }
     } catch {}
   }
 }
@@ -360,15 +398,27 @@ app.get('/api/online/search', async (req, res) => {
   const q = String(req.query.q || '').trim().slice(0, 100);
   if (!q) return res.status(400).json({ error: '请输入搜索关键词' });
   const vipExtra = { vipEnabled: neteaseVip.valid, vipNickname: neteaseVip.nickname };
+  const offset = Math.max(0, Math.floor(Number(req.query.offset) || 0));
+  const pageSize = 20;
+  const respond = (data) => {
+    const results = data.results.slice(offset, offset + pageSize);
+    res.json({
+      total: data.total,
+      results,
+      hasMore: offset + pageSize < data.results.length,
+      degraded: data.degraded === true,
+      ...vipExtra,
+    });
+  };
   const cached = onlineCache.get(q);
   if (cached && Date.now() - cached.at < ONLINE_CACHE_TTL_MS) {
-    return res.json({ ...cached.data, ...vipExtra });
+    return respond(cached.data);
   }
   try {
     const data = await online.searchOnline(q);
     onlineCache.set(q, { at: Date.now(), data });
     if (onlineCache.size > 200) onlineCache.delete(onlineCache.keys().next().value);
-    res.json({ ...data, ...vipExtra });
+    respond(data);
   } catch {
     res.status(502).json({ error: '在线曲库暂时不可用，请稍后再试' });
   }
@@ -388,17 +438,30 @@ app.post('/api/online/add', async (req, res) => {
   const cacheKey =
     parsed.source + ':' + (parsed.source === 'netease' ? parsed.neteaseId : parsed.audioId);
   let file = onlineFiles.get(cacheKey);
+  // 缓存指向的文件可能已被外部删除（用户清理 library/online 等）：先验证存在性，
+  // 不存在就当作没有缓存重新下载，避免后面 statSync 抛 ENOENT 把整个进程带崩
+  if (file && !fs.existsSync(path.join(ONLINE_DIR, file))) {
+    onlineFiles.delete(cacheKey);
+    file = null;
+  }
   let trackName = name;
   let provider = parsed.source;
   let track;
   if (!file) {
+    // 并发下载上限：在线下载是大流量操作，限制同时进行的下载数防止带宽/连接被刷爆
+    if (onlineDownloads >= ONLINE_MAX_CONCURRENT_DOWNLOADS) {
+      return res.status(429).json({ error: '下载繁忙，请稍后再试' });
+    }
+    onlineDownloads += 1;
     let done;
     try {
       done = await online.resolveAndDownloadOnline(trackId, name, artist, ONLINE_DIR);
     } catch {
+      onlineDownloads -= 1;
       // 下载/接口异常（超时、断流、第三方出错）不能拖垮服务，统一按暂时不可用返回
       return res.status(502).json({ error: '在线曲库暂时不可用，请稍后再试' });
     }
+    onlineDownloads -= 1;
     if (done.error) return res.status(502).json({ error: done.error });
     trackName = done.name || name;
     provider = done.provider;
@@ -418,11 +481,21 @@ app.post('/api/online/add', async (req, res) => {
     } else {
       file = done.file;
       onlineFiles.set(cacheKey, file);
+      // 缓存表上限：防条目无限增长（磁盘清理会同步删对应条目，这里兜底）
+      if (onlineFiles.size > 500) onlineFiles.delete(onlineFiles.keys().next().value);
+      let size;
+      try {
+        size = fs.statSync(path.join(ONLINE_DIR, file)).size;
+      } catch {
+        // 下载落盘后立即消失的极端情况：清缓存并报错，让客户端重试
+        onlineFiles.delete(cacheKey);
+        return res.status(502).json({ error: '歌曲文件不可用，请重新添加' });
+      }
       track = {
         id: crypto.randomBytes(6).toString('hex'),
         name: trackName,
         url: '/library/online/' + encodeURIComponent(file),
-        size: fs.statSync(path.join(ONLINE_DIR, file)).size,
+        size,
         uploader: String(req.body.nickname || '匿名').trim().slice(0, 20) || '匿名',
         source: 'online',
         provider,
@@ -430,11 +503,19 @@ app.post('/api/online/add', async (req, res) => {
       };
     }
   } else {
+    let size;
+    try {
+      size = fs.statSync(path.join(ONLINE_DIR, file)).size;
+    } catch {
+      // 刚校验过存在性，这里只防校验与读取之间的竞态
+      onlineFiles.delete(cacheKey);
+      return res.status(502).json({ error: '歌曲文件不可用，请重新添加' });
+    }
     track = {
       id: crypto.randomBytes(6).toString('hex'),
       name: trackName,
       url: '/library/online/' + encodeURIComponent(file),
-      size: fs.statSync(path.join(ONLINE_DIR, file)).size,
+      size,
       uploader: String(req.body.nickname || '匿名').trim().slice(0, 20) || '匿名',
       source: 'online',
       provider,
@@ -831,3 +912,5 @@ server.listen(PORT, () => {
 // 曲库索引定期刷新；孤儿文件每天清理几次，防止磁盘被慢慢占满
 setInterval(refreshLibraryIndex, LIBRARY_INDEX_REFRESH_MS).unref();
 setInterval(cleanupOrphanUploads, 6 * 60 * 60 * 1000).unref();
+// 在线下载缓存文件定期清理（缓存性质，可重新下载）
+setInterval(cleanupOrphanOnlineFiles, ONLINE_CLEAN_INTERVAL_MS).unref();

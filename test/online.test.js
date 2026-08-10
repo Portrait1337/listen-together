@@ -377,16 +377,27 @@ test('在线搜索结果缓存 60 秒，重复搜索不重复请求第三方', a
 });
 
 test('单源结果过多时仍保证两个来源都可见', async () => {
-  const res = await fetch(`http://127.0.0.1:${PORT}/api/online/search?q=多结果`);
-  assert.equal(res.status, 200);
-  const data = await res.json();
-  const sources = new Set(data.results.map((r) => r.source));
-  assert.equal(data.total, 72); // 咪咕 3 页 × 20 条 + 网易云 12 条
-  assert.equal(data.results.length, 72);
-  assert.equal(data.results.filter((r) => r.source === 'migu').length, 60);
-  assert.equal(data.results.filter((r) => r.source === 'netease').length, 12);
+  const page1 = await (await fetch(`http://127.0.0.1:${PORT}/api/online/search?q=多结果`)).json();
+  assert.equal(page1.total, 72); // 咪咕 3 页 × 20 条 + 网易云 12 条
+  assert.equal(page1.results.length, 20);
+  assert.equal(page1.hasMore, true);
+  const page4 = await (
+    await fetch(`http://127.0.0.1:${PORT}/api/online/search?q=多结果&offset=60`)
+  ).json();
+  assert.equal(page4.results.length, 12);
+  assert.equal(page4.hasMore, false);
+  const sources = new Set([...page1.results, ...page4.results].map((r) => r.source));
   assert.ok(sources.has('netease'));
   assert.ok(sources.has('migu'));
+});
+
+test('在线搜索分页：offset 越界返回空且 hasMore=false', async () => {
+  const data = await (
+    await fetch(`http://127.0.0.1:${PORT}/api/online/search?q=多结果&offset=100`)
+  ).json();
+  assert.equal(data.results.length, 0);
+  assert.equal(data.hasMore, false);
+  assert.equal(data.total, 72);
 });
 
 test('搜索结果按歌名+歌手去重', async () => {

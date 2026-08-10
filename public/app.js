@@ -58,6 +58,8 @@ let libraryTimer = null;
 let librarySeq = 0;
 let libraryComposing = false;
 let searchTab = 'local'; // 搜索来源：local=本地曲库 online=在线音乐
+let onlineOffset = 0; // 在线搜索已加载条数
+let onlineHasMore = false;
 
 // ---------- 连接 ----------
 function send(obj) {
@@ -674,6 +676,8 @@ async function searchOnline() {
   const q = ui.librarySearch.value.trim();
   const seq = ++librarySeq;
   clearTimeout(libraryTimer);
+  onlineOffset = 0;
+  onlineHasMore = false;
   if (!q) {
     ui.libraryResults.classList.add('hidden');
     ui.libraryResults.innerHTML = '';
@@ -682,11 +686,11 @@ async function searchOnline() {
   ui.libraryResults.classList.remove('hidden');
   ui.libraryResults.innerHTML = '<div class="lib-note">搜索中…</div>';
   try {
-    const res = await fetch('/api/online/search?q=' + encodeURIComponent(q));
+    const res = await fetch('/api/online/search?q=' + encodeURIComponent(q) + '&offset=0');
     const data = await res.json();
     if (seq !== librarySeq) return; // 丢弃过期结果
     if (!res.ok) throw new Error(data.error || '搜索失败');
-    renderOnlineResults(data.results || [], data.total || 0, data.vipEnabled === true);
+    renderOnlineResults(data.results || [], data.total || 0, data.vipEnabled === true, data.hasMore === true);
   } catch {
     if (seq === librarySeq) {
       ui.libraryResults.innerHTML = '<div class="lib-note">在线曲库暂时不可用，请稍后再试</div>';
@@ -694,7 +698,40 @@ async function searchOnline() {
   }
 }
 
-function renderOnlineResults(results, total, vipEnabled) {
+function makeOnlineRow(t, vipEnabled) {
+  const row = document.createElement('div');
+  row.className = 'lib-row';
+  const badge = document.createElement('span');
+  badge.className = 'lib-badge ' + t.source;
+  badge.textContent = t.source === 'netease' ? '网易云' : '咪咕';
+  const name = document.createElement('span');
+  name.className = 'lib-name';
+  name.textContent = t.name;
+  name.title = t.name;
+  const meta = document.createElement('span');
+  meta.className = 'lib-meta';
+  meta.textContent = [t.artist, t.durationMs ? fmt(t.durationMs) : ''].filter(Boolean).join(' · ');
+  const add = document.createElement('button');
+  add.className = 'small';
+  // 会员歌：只有服务器配了有效会员 Cookie 才允许添加
+  if (t.playable || (vipEnabled && !t.playable)) {
+    add.textContent = '+ 添加';
+    add.addEventListener('click', () => addOnlineTrack(t, add));
+  } else {
+    add.textContent = '会员专属';
+    add.disabled = true;
+  }
+  row.append(badge, name, meta, add);
+  return row;
+}
+
+function appendOnlineRows(results, vipEnabled, beforeEl) {
+  const frag = document.createDocumentFragment();
+  results.forEach((t) => frag.append(makeOnlineRow(t, vipEnabled)));
+  ui.libraryResults.insertBefore(frag, beforeEl || null);
+}
+
+function renderOnlineResults(results, total, vipEnabled, hasMore) {
   ui.libraryResults.innerHTML = '';
   if (total === 0) {
     const note = document.createElement('div');
@@ -703,32 +740,46 @@ function renderOnlineResults(results, total, vipEnabled) {
     ui.libraryResults.append(note);
     return;
   }
-  results.forEach((t) => {
-    const row = document.createElement('div');
-    row.className = 'lib-row';
-    const badge = document.createElement('span');
-    badge.className = 'lib-badge ' + t.source;
-    badge.textContent = t.source === 'netease' ? '网易云' : '咪咕';
-    const name = document.createElement('span');
-    name.className = 'lib-name';
-    name.textContent = t.name;
-    name.title = t.name;
-    const meta = document.createElement('span');
-    meta.className = 'lib-meta';
-    meta.textContent = [t.artist, t.durationMs ? fmt(t.durationMs) : ''].filter(Boolean).join(' · ');
-    const add = document.createElement('button');
-    add.className = 'small';
-    // 会员歌：只有服务器配了有效会员 Cookie 才允许添加
-    if (t.playable || (vipEnabled && !t.playable)) {
-      add.textContent = '+ 添加';
-      add.addEventListener('click', () => addOnlineTrack(t, add));
-    } else {
-      add.textContent = '会员专属';
-      add.disabled = true;
+  appendOnlineRows(results, vipEnabled);
+  onlineHasMore = hasMore;
+  if (hasMore) {
+    const more = document.createElement('button');
+    more.className = 'load-more';
+    more.textContent = '加载更多';
+    more.addEventListener('click', loadMoreOnline);
+    ui.libraryResults.append(more);
+  }
+}
+
+async function loadMoreOnline() {
+  const q = ui.librarySearch.value.trim();
+  if (!q || searchTab !== 'online' || !onlineHasMore) return;
+  const btn = ui.libraryResults.querySelector('.load-more');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '加载中…';
+  }
+  try {
+    const res = await fetch('/api/online/search?q=' + encodeURIComponent(q) + '&offset=' + onlineOffset);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '加载失败');
+    appendOnlineRows(data.results || [], data.vipEnabled === true, btn);
+    onlineOffset += (data.results || []).length;
+    onlineHasMore = data.hasMore === true;
+    if (btn) {
+      if (onlineHasMore) {
+        btn.disabled = false;
+        btn.textContent = '加载更多';
+      } else {
+        btn.remove();
+      }
     }
-    row.append(badge, name, meta, add);
-    ui.libraryResults.append(row);
-  });
+  } catch {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '加载更多';
+    }
+  }
 }
 
 async function addOnlineTrack(track, btn) {
