@@ -10,11 +10,11 @@ REMOTE_USER="$(ssh "$SERVER" 'whoami')"
 
 echo "==> 1/4 同步项目文件到服务器"
 rsync -az --delete -e ssh \
-  --exclude node_modules --exclude uploads --exclude .git --exclude '.DS_Store' \
+  --exclude node_modules --exclude uploads --exclude library --exclude .git --exclude '.DS_Store' \
   "$LOCAL_DIR/" "$SERVER:/tmp/listen-together/"
 
 echo "==> 2/4 安装依赖（服务器需已装 Node.js 18+）"
-ssh "$SERVER" "sudo mkdir -p '$APP_DIR' && sudo rsync -a --delete --exclude uploads /tmp/listen-together/ '$APP_DIR/' && cd '$APP_DIR' && npm install --omit=dev && sudo chown -R '$REMOTE_USER' '$APP_DIR'"
+ssh "$SERVER" "sudo mkdir -p '$APP_DIR' && sudo rsync -a --delete --exclude uploads --exclude library /tmp/listen-together/ '$APP_DIR/' && cd '$APP_DIR' && npm install --omit=dev && sudo chown -R '$REMOTE_USER' '$APP_DIR'"
 
 echo "==> 3/4 安装并启动 systemd 服务（开机自启）"
 sed "s/__USER__/$REMOTE_USER/" "$LOCAL_DIR/deploy/listen-together.service" > /tmp/listen-together.service

@@ -3,10 +3,14 @@ const assert = require('node:assert');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const path = require('node:path');
+const os = require('node:os');
+const fs = require('node:fs');
 const WebSocket = require('ws');
 
 const SERVER_PATH = path.join(__dirname, '..', 'server.js');
-const PORT = 5000 + crypto.randomInt(1000, 9000);
+const PORT = 20000 + crypto.randomInt(0, 30000);
+// 测试上传目录：指向独立临时目录，避免污染/误删项目真实 uploads/
+const uploadTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lt-upload-'));
 
 let serverProcess = null;
 const clients = [];
@@ -14,7 +18,13 @@ const clients = [];
 function startServer() {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [SERVER_PATH], {
-      env: { ...process.env, PORT: String(PORT) },
+      env: {
+        ...process.env,
+        PORT: String(PORT),
+        UPLOAD_DIR: uploadTmpDir,
+        // 该测试会以最高速连发 105 条消息验证历史上限，节流交给 ws-guard 专项测试，这里放开
+        MAX_WS_MSGS_PER_SECOND: '1000',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -99,6 +109,7 @@ before(async () => {
 after(() => {
   for (const client of clients) client.close();
   if (serverProcess) serverProcess.kill();
+  fs.rmSync(uploadTmpDir, { recursive: true, force: true });
 });
 
 test('新用户进房能看到之前的聊天记录', async () => {

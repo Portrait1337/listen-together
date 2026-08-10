@@ -3,11 +3,15 @@ const assert = require('node:assert');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const path = require('node:path');
+const os = require('node:os');
+const fs = require('node:fs');
 const http = require('node:http');
 const WebSocket = require('ws');
 
 const SERVER_PATH = path.join(__dirname, '..', 'server.js');
-const PORT = 5000 + crypto.randomInt(1000, 9000);
+const PORT = 20000 + crypto.randomInt(0, 30000);
+// 测试上传目录：指向独立临时目录，避免污染/误删项目真实 uploads/
+const uploadTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lt-upload-'));
 
 let serverProcess = null;
 const clients = [];
@@ -18,6 +22,7 @@ function startServer() {
       env: {
         ...process.env,
         PORT: String(PORT),
+        UPLOAD_DIR: uploadTmpDir,
         EMPTY_ROOM_TTL_MS: '150',
         ACTIVE_ROOM_TTL_MS: '600',
       },
@@ -163,6 +168,7 @@ before(async () => {
 after(() => {
   for (const client of clients) client.close();
   if (serverProcess) serverProcess.kill();
+  fs.rmSync(uploadTmpDir, { recursive: true, force: true });
 });
 
 test('房间在最后一个人退出后延迟销毁', async () => {

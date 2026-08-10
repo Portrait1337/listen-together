@@ -3,10 +3,14 @@ const assert = require('node:assert');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const path = require('node:path');
+const os = require('node:os');
+const fs = require('node:fs');
 const WebSocket = require('ws');
 
 const SERVER_PATH = path.join(__dirname, '..', 'server.js');
-const PORT = 5000 + crypto.randomInt(1000, 9000);
+const PORT = 20000 + crypto.randomInt(0, 30000);
+// 测试上传目录：指向独立临时目录，避免污染/误删项目真实 uploads/
+const uploadTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lt-upload-'));
 
 let serverProcess = null;
 const clients = [];
@@ -17,8 +21,12 @@ function startServer() {
       env: {
         ...process.env,
         PORT: String(PORT),
+        UPLOAD_DIR: uploadTmpDir,
         EMPTY_ROOM_TTL_MS: '5000',
         ACTIVE_ROOM_TTL_MS: '5000',
+        MAX_CONCURRENT_UPLOADS_PER_IP: '100',
+        MAX_UPLOADS_PER_MINUTE_PER_IP: '10000',
+        SINGLE_LOOP_DEDUP_MS: '100',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -148,6 +156,7 @@ before(async () => {
 after(() => {
   for (const client of clients) client.close();
   if (serverProcess) serverProcess.kill();
+  fs.rmSync(uploadTmpDir, { recursive: true, force: true });
 });
 
 test('可以从歌单删除歌曲，删当前播放的歌会自动切到下一首', async () => {
@@ -233,7 +242,7 @@ test('单曲循环模式：播完停在当前歌并重新开始', async () => {
 
   // 单曲循环：播完仍停在当前歌，进度归零
   const singleBefore = state.currentIndex;
-  alice.send({ type: 'control', action: 'ended' });
+  alice.send({ type: 'control', action: 'ended', trackId: state.playlist[state.currentIndex].id });
   state = await alice.waitForNextState();
   assert.equal(state.currentIndex, singleBefore);
   assert.equal(state.positionMs, 0);
@@ -252,7 +261,7 @@ test('顺序模式：播完切到下一首', async () => {
   alice.send({ type: 'control', action: 'play' });
   let state = await alice.waitForState((s) => s.playing === true);
   const orderBefore = state.currentIndex;
-  alice.send({ type: 'control', action: 'ended' });
+  alice.send({ type: 'control', action: 'ended', trackId: state.playlist[state.currentIndex].id });
   state = await alice.waitForState((s) => s.currentIndex !== orderBefore);
   assert.equal(state.currentIndex, (orderBefore + 1) % 2);
   await alice.close();
@@ -270,7 +279,7 @@ test('随机模式：播完切到另一首', async () => {
   alice.send({ type: 'control', action: 'play' });
   state = await alice.waitForState((s) => s.playing === true);
   const shuffleBefore = state.currentIndex;
-  alice.send({ type: 'control', action: 'ended' });
+  alice.send({ type: 'control', action: 'ended', trackId: state.playlist[state.currentIndex].id });
   state = await alice.waitForState((s) => s.currentIndex !== shuffleBefore);
   assert.equal(state.currentIndex, 1 - shuffleBefore);
 
@@ -337,6 +346,56 @@ test('迟到的旧歌“播完”信号不会切歌', async () => {
   state = await alice.waitForNextState();
   assert.equal(state.currentIndex, 1);
   assert.equal(state.playlist[1].id, secondId);
+
+  await alice.close();
+});
+
+test('单曲循环下短歌再次播完会被处理，不会被长去重窗口吞掉', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitForState((s) => s.code);
+
+  await uploadTrack(created.code, 'song.wav');
+  await alice.waitForState((s) => s.playlist.length === 1);
+  alice.send({ type: 'control', action: 'set_mode', mode: 'single' });
+  await alice.waitForState((s) => s.playMode === 'single');
+  alice.send({ type: 'control', action: 'play' });
+  await alice.waitForState((s) => s.playing === true);
+
+  const trackId = (await alice.waitForState(() => true)).playlist[0].id;
+  alice.send({ type: 'control', action: 'ended', trackId });
+  const afterFirst = await alice.waitForNextState();
+  const updatedAfterFirst = afterFirst.updatedAt;
+
+  // 等超过单曲循环去重窗口（测试环境 100ms），再模拟短歌第二次播完
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  alice.send({ type: 'control', action: 'ended', trackId });
+  const afterSecond = await alice.waitForNextState();
+  assert.notEqual(afterSecond.updatedAt, updatedAfterFirst);
+  assert.equal(afterSecond.currentIndex, 0);
+  assert.equal(afterSecond.positionMs, 0);
+
+  await alice.close();
+});
+
+test('伪装成音频的 html 文件会被上传校验拒绝', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitForState((s) => s.code);
+
+  const evil = Buffer.from('<script>alert(1)</script>');
+  const form = new FormData();
+  form.append('roomId', created.code);
+  form.append('nickname', '小A');
+  // 即使 Content-Type 伪装成 audio/html，扩展名不是白名单也必须拒绝
+  form.append('file', new Blob([evil], { type: 'audio/html' }), 'evil.html');
+  const res = await fetch(
+    `http://127.0.0.1:${PORT}/api/upload?roomId=${encodeURIComponent(created.code)}`,
+    { method: 'POST', body: form }
+  );
+  assert.equal(res.status, 400);
+  const data = await res.json();
+  assert.match(data.error, /只支持音频文件/);
 
   await alice.close();
 });
