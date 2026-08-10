@@ -400,6 +400,27 @@ test('在线搜索分页：offset 越界返回空且 hasMore=false', async () =>
   assert.equal(data.total, 72);
 });
 
+test('在线搜索按来源过滤：source=netease 只返回网易云', async () => {
+  const data = await (
+    await fetch(`http://127.0.0.1:${PORT}/api/online/search?q=测试&source=netease`)
+  ).json();
+  assert.equal(data.total, 2);
+  assert.ok(data.results.every((r) => r.source === 'netease'));
+});
+
+test('在线搜索按来源过滤：source=migu 只返回咪咕', async () => {
+  const data = await (
+    await fetch(`http://127.0.0.1:${PORT}/api/online/search?q=测试&source=migu`)
+  ).json();
+  assert.equal(data.total, 1);
+  assert.ok(data.results.every((r) => r.source === 'migu'));
+});
+
+test('在线搜索非法来源参数返回 400', async () => {
+  const res = await fetch(`http://127.0.0.1:${PORT}/api/online/search?q=测试&source=qq`);
+  assert.equal(res.status, 400);
+});
+
 test('搜索结果按歌名+歌手去重', async () => {
   const res = await fetch(`http://127.0.0.1:${PORT}/api/online/search?q=重复`);
   assert.equal(res.status, 200);

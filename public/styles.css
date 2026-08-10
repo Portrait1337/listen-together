@@ -264,6 +264,12 @@ input[type="range"] {
   margin-bottom: 10px;
 }
 
+.platform-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
 .search-row input {
   margin: 0;
   font-size: 14px;

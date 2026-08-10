@@ -397,6 +397,10 @@ app.get('/api/online/search', async (req, res) => {
   }
   const q = String(req.query.q || '').trim().slice(0, 100);
   if (!q) return res.status(400).json({ error: '请输入搜索关键词' });
+  const source = String(req.query.source || 'all');
+  if (source !== 'all' && source !== 'netease' && source !== 'migu') {
+    return res.status(400).json({ error: '无效的搜索来源' });
+  }
   const vipExtra = { vipEnabled: neteaseVip.valid, vipNickname: neteaseVip.nickname };
   const offset = Math.max(0, Math.floor(Number(req.query.offset) || 0));
   const pageSize = 20;
@@ -410,13 +414,14 @@ app.get('/api/online/search', async (req, res) => {
       ...vipExtra,
     });
   };
-  const cached = onlineCache.get(q);
+  const cacheKey = q + '|' + source;
+  const cached = onlineCache.get(cacheKey);
   if (cached && Date.now() - cached.at < ONLINE_CACHE_TTL_MS) {
     return respond(cached.data);
   }
   try {
-    const data = await online.searchOnline(q);
-    onlineCache.set(q, { at: Date.now(), data });
+    const data = await online.searchOnline(q, { source });
+    onlineCache.set(cacheKey, { at: Date.now(), data });
     if (onlineCache.size > 200) onlineCache.delete(onlineCache.keys().next().value);
     respond(data);
   } catch {

@@ -246,8 +246,13 @@ async function downloadMiguTrack(song, destDir, fetchImpl) {
   return { file, provider: 'migu', name: song.name || `咪咕歌曲 ${rawId}` };
 }
 
-async function searchOnline(q, { fetchImpl = fetch } = {}) {
-  const [ne, mg] = await Promise.allSettled([neteaseSearch(q, fetchImpl), miguSearch(q, fetchImpl)]);
+async function searchOnline(q, { source = 'all', fetchImpl = fetch } = {}) {
+  const wantNe = source === 'all' || source === 'netease';
+  const wantMg = source === 'all' || source === 'migu';
+  const [ne, mg] = await Promise.allSettled([
+    wantNe ? neteaseSearch(q, fetchImpl) : Promise.resolve([]),
+    wantMg ? miguSearch(q, fetchImpl) : Promise.resolve([]),
+  ]);
   const results = [];
   const seen = new Set();
   const pushUnique = (list) => {
@@ -266,7 +271,7 @@ async function searchOnline(q, { fetchImpl = fetch } = {}) {
   return {
     total: results.length,
     results,
-    degraded: ne.status !== 'fulfilled' || mg.status !== 'fulfilled',
+    degraded: (wantNe && ne.status !== 'fulfilled') || (wantMg && mg.status !== 'fulfilled'),
   };
 }
 

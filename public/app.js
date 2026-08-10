@@ -25,6 +25,9 @@ const ui = {
   libraryResults: $('libraryResults'),
   tabLocal: $('tabLocal'),
   tabOnline: $('tabOnline'),
+  platformTabs: $('platformTabs'),
+  platNetease: $('platNetease'),
+  platMigu: $('platMigu'),
   fileInput: $('fileInput'),
   uploadBtn: $('uploadBtn'),
   modeBtn: $('modeBtn'),
@@ -60,6 +63,7 @@ let libraryComposing = false;
 let searchTab = 'local'; // 搜索来源：local=本地曲库 online=在线音乐
 let onlineOffset = 0; // 在线搜索已加载条数
 let onlineHasMore = false;
+let onlineSource = 'netease'; // 在线搜索当前平台：netease / migu
 
 // ---------- 连接 ----------
 function send(obj) {
@@ -578,6 +582,7 @@ function setSearchTab(tab) {
   searchTab = tab;
   ui.tabLocal.classList.toggle('active', tab === 'local');
   ui.tabOnline.classList.toggle('active', tab === 'online');
+  ui.platformTabs.classList.toggle('hidden', tab !== 'online');
   ui.librarySearch.placeholder = tab === 'local' ? '搜索本地曲库…' : '搜索在线音乐…';
   ui.librarySearch.value = '';
   ui.libraryResults.classList.add('hidden');
@@ -585,6 +590,24 @@ function setSearchTab(tab) {
 }
 ui.tabLocal.addEventListener('click', () => setSearchTab('local'));
 ui.tabOnline.addEventListener('click', () => setSearchTab('online'));
+
+// 在线音乐按平台分开显示：网易云 / 咪咕
+function setOnlineSource(source) {
+  onlineSource = source;
+  ui.platNetease.classList.toggle('active', source === 'netease');
+  ui.platMigu.classList.toggle('active', source === 'migu');
+  onlineOffset = 0;
+  onlineHasMore = false;
+  ui.libraryResults.classList.add('hidden');
+  ui.libraryResults.innerHTML = '';
+  // 已有搜索词时立即按新平台重新搜索
+  if (searchTab === 'online' && ui.librarySearch.value.trim()) {
+    clearTimeout(libraryTimer);
+    searchOnline();
+  }
+}
+ui.platNetease.addEventListener('click', () => setOnlineSource('netease'));
+ui.platMigu.addEventListener('click', () => setOnlineSource('migu'));
 
 // ---------- 本地曲库：搜索与添加 ----------
 function scheduleLibrarySearch() {
@@ -686,7 +709,9 @@ async function searchOnline() {
   ui.libraryResults.classList.remove('hidden');
   ui.libraryResults.innerHTML = '<div class="lib-note">搜索中…</div>';
   try {
-    const res = await fetch('/api/online/search?q=' + encodeURIComponent(q) + '&offset=0');
+    const res = await fetch(
+      '/api/online/search?q=' + encodeURIComponent(q) + '&source=' + onlineSource + '&offset=0'
+    );
     const data = await res.json();
     if (seq !== librarySeq) return; // 丢弃过期结果
     if (!res.ok) throw new Error(data.error || '搜索失败');
@@ -760,7 +785,9 @@ async function loadMoreOnline() {
     btn.textContent = '加载中…';
   }
   try {
-    const res = await fetch('/api/online/search?q=' + encodeURIComponent(q) + '&offset=' + onlineOffset);
+    const res = await fetch(
+      '/api/online/search?q=' + encodeURIComponent(q) + '&source=' + onlineSource + '&offset=' + onlineOffset
+    );
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || '加载失败');
     appendOnlineRows(data.results || [], data.vipEnabled === true, btn);
