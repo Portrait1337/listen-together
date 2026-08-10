@@ -23,6 +23,8 @@ const ui = {
   playlist: $('playlist'),
   librarySearch: $('librarySearch'),
   libraryResults: $('libraryResults'),
+  tabLocal: $('tabLocal'),
+  tabOnline: $('tabOnline'),
   fileInput: $('fileInput'),
   uploadBtn: $('uploadBtn'),
   modeBtn: $('modeBtn'),
@@ -55,6 +57,7 @@ let autoJoinTimer = null;
 let libraryTimer = null;
 let librarySeq = 0;
 let libraryComposing = false;
+let searchTab = 'local'; // 搜索来源：local=本地曲库 online=在线音乐
 
 // ---------- 连接 ----------
 function send(obj) {
@@ -568,6 +571,19 @@ ui.fileInput.addEventListener('change', async () => {
   }
 });
 
+// ---------- 搜索来源切换：本地曲库 / 在线音乐 ----------
+function setSearchTab(tab) {
+  searchTab = tab;
+  ui.tabLocal.classList.toggle('active', tab === 'local');
+  ui.tabOnline.classList.toggle('active', tab === 'online');
+  ui.librarySearch.placeholder = tab === 'local' ? '搜索本地曲库…' : '搜索在线音乐…';
+  ui.librarySearch.value = '';
+  ui.libraryResults.classList.add('hidden');
+  ui.libraryResults.innerHTML = '';
+}
+ui.tabLocal.addEventListener('click', () => setSearchTab('local'));
+ui.tabOnline.addEventListener('click', () => setSearchTab('online'));
+
 // ---------- 本地曲库：搜索与添加 ----------
 function scheduleLibrarySearch() {
   clearTimeout(libraryTimer);
@@ -575,6 +591,7 @@ function scheduleLibrarySearch() {
 }
 
 async function searchLibrary() {
+  if (searchTab === 'online') return searchOnline();
   const q = ui.librarySearch.value.trim();
   const seq = ++librarySeq;
   clearTimeout(libraryTimer);
@@ -650,6 +667,95 @@ async function addLibraryTrack(track, btn) {
     btn.disabled = false;
     btn.textContent = '+ 添加';
   }, 1500);
+}
+
+// ---------- 在线音乐：搜索与添加 ----------
+async function searchOnline() {
+  const q = ui.librarySearch.value.trim();
+  const seq = ++librarySeq;
+  clearTimeout(libraryTimer);
+  if (!q) {
+    ui.libraryResults.classList.add('hidden');
+    ui.libraryResults.innerHTML = '';
+    return;
+  }
+  ui.libraryResults.classList.remove('hidden');
+  ui.libraryResults.innerHTML = '<div class="lib-note">搜索中…</div>';
+  try {
+    const res = await fetch('/api/online/search?q=' + encodeURIComponent(q));
+    const data = await res.json();
+    if (seq !== librarySeq) return; // 丢弃过期结果
+    if (!res.ok) throw new Error(data.error || '搜索失败');
+    renderOnlineResults(data.results || [], data.total || 0);
+  } catch {
+    if (seq === librarySeq) {
+      ui.libraryResults.innerHTML = '<div class="lib-note">在线曲库暂时不可用，请稍后再试</div>';
+    }
+  }
+}
+
+function renderOnlineResults(results, total) {
+  ui.libraryResults.innerHTML = '';
+  if (total === 0) {
+    const note = document.createElement('div');
+    note.className = 'lib-note';
+    note.textContent = '没有找到匹配的在线歌曲';
+    ui.libraryResults.append(note);
+    return;
+  }
+  results.forEach((t) => {
+    const row = document.createElement('div');
+    row.className = 'lib-row';
+    const badge = document.createElement('span');
+    badge.className = 'lib-badge ' + t.source;
+    badge.textContent = t.source === 'netease' ? '网易云' : '咪咕';
+    const name = document.createElement('span');
+    name.className = 'lib-name';
+    name.textContent = t.name;
+    name.title = t.name;
+    const meta = document.createElement('span');
+    meta.className = 'lib-meta';
+    meta.textContent = [t.artist, t.durationMs ? fmt(t.durationMs) : ''].filter(Boolean).join(' · ');
+    const add = document.createElement('button');
+    add.className = 'small';
+    if (t.playable) {
+      add.textContent = '+ 添加';
+      add.addEventListener('click', () => addOnlineTrack(t, add));
+    } else {
+      add.textContent = '会员专属';
+      add.disabled = true;
+    }
+    row.append(badge, name, meta, add);
+    ui.libraryResults.append(row);
+  });
+}
+
+async function addOnlineTrack(track, btn) {
+  if (!roomCode) return;
+  btn.disabled = true;
+  btn.textContent = '添加中…';
+  try {
+    const res = await fetch('/api/online/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        roomId: roomCode,
+        trackId: track.id,
+        name: track.name,
+        artist: track.artist,
+        nickname,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '添加失败');
+    btn.textContent = '✓ 已添加';
+  } catch (e) {
+    btn.textContent = e.message || '添加失败';
+  }
+  setTimeout(() => {
+    btn.disabled = false;
+    btn.textContent = '+ 添加';
+  }, 2000);
 }
 
 ui.librarySearch.addEventListener('compositionstart', () => {
@@ -827,6 +933,7 @@ function leaveRoom() {
   enteredRoom = false;
   roomCode = null;
   creatingRoom = false;
+  setSearchTab('local');
   ui.librarySearch.value = '';
   ui.libraryResults.classList.add('hidden');
   ui.libraryResults.innerHTML = '';

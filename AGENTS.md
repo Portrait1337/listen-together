@@ -11,7 +11,8 @@
 
 ## 代码结构
 
-- `server.js` — 唯一的后端：Express 静态服务 + REST API + WebSocket 同步。房间、歌单、聊天历史都存在内存里，重启即清空。
+- `server.js` — 后端入口：Express 静态服务 + REST API + WebSocket 同步。房间、歌单、聊天历史都存在内存里，重启即清空。
+- `online.js` — 在线音乐提供者（网易云 + 咪咕）：统一搜索、下载、双源自动换源；第三方地址用环境变量可配。
 - `public/` — 前端，原生 JS，无框架、无构建步骤：
   - `index.html` / `app.js` / `styles.css` — 页面主体
   - `sync-policy.js` — UMD 模块，播放同步自动纠偏策略，浏览器和测试共用
@@ -45,5 +46,5 @@
 - 交付前至少跑一遍 `node --test`，再用 `npm start` 手动验证关键流程。
 
 ## 下一步目标
-- 加入联网搜索，接入外部源
-- 
+- 会员账号登录解锁 VIP 歌（可选）
+- 接入酷狗作为第三源

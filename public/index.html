@@ -54,8 +54,12 @@
         </div>
         <input id="fileInput" type="file" accept="audio/*,.m4a" hidden>
       </div>
+      <div class="search-tabs">
+        <button id="tabLocal" class="tab active" type="button">本地曲库</button>
+        <button id="tabOnline" class="tab" type="button">在线音乐</button>
+      </div>
       <div class="search-row">
-        <input id="librarySearch" type="text" placeholder="搜索本地曲库，添加歌曲…" autocomplete="off">
+        <input id="librarySearch" type="text" placeholder="搜索本地曲库…" autocomplete="off">
       </div>
       <div id="libraryResults" class="library-results hidden"></div>
       <div id="playlist" class="playlist"></div>

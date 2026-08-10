@@ -239,6 +239,27 @@ input[type="range"] {
   flex-shrink: 0;
 }
 
+.search-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.tab {
+  flex: 1;
+  padding: 9px 0;
+  border-radius: 10px;
+  background: #1e212c;
+  color: #8a8f9c;
+  font-size: 14px;
+  text-align: center;
+}
+
+.tab.active {
+  background: #5865f2;
+  color: #fff;
+}
+
 .search-row {
   margin-bottom: 10px;
 }
@@ -277,6 +298,28 @@ input[type="range"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.lib-badge {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #fff;
+}
+
+.lib-badge.netease {
+  background: #c62f2f;
+}
+
+.lib-badge.migu {
+  background: #1f9d55;
+}
+
+.lib-meta {
+  flex-shrink: 0;
+  color: #8a8f9c;
+  font-size: 12px;
 }
 
 .lib-row button {
