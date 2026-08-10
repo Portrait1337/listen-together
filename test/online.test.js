@@ -41,6 +41,20 @@ function startStub() {
       };
       if (u.pathname === '/api/search/get/web') {
         counts.neteaseSearch += 1;
+        if ((u.searchParams.get('s') || '').includes('多结果')) {
+          return sendJson(200, {
+            result: {
+              songs: Array.from({ length: 12 }, (_, i) => ({
+                id: 900 + i,
+                name: `网易歌${i + 1}`,
+                artists: [{ name: '歌手N' }],
+                album: { name: '专辑N' },
+                duration: 1000,
+                fee: 0,
+              })),
+            },
+          });
+        }
         return sendJson(200, {
           result: {
             songs: [
@@ -67,6 +81,21 @@ function startStub() {
       if (u.pathname === '/MIGUM2.0/v1.0/content/search_all.do') {
         counts.miguSearch += 1;
         const text = u.searchParams.get('text') || '';
+        if (text.includes('多结果')) {
+          return sendJson(200, {
+            code: '000000',
+            songResultData: {
+              result: Array.from({ length: 24 }, (_, i) => ({
+                id: String(700 + i),
+                contentId: 'c' + (700 + i),
+                copyrightId: 'cr' + (700 + i),
+                name: `咪咕歌${i + 1}`,
+                singers: [{ name: '歌手M' }],
+                albums: [{ name: '专辑M' }],
+              })),
+            },
+          });
+        }
         if (text.includes('找不到')) {
           return sendJson(200, { code: '000000', songResultData: { result: [] } });
         }
@@ -294,6 +323,17 @@ test('在线搜索结果缓存 60 秒，重复搜索不重复请求第三方', a
     assert.equal(res.status, 200);
   }
   assert.equal(stub.counts.neteaseSearch, before + 1);
+});
+
+test('单源结果过多时仍保证两个来源都可见', async () => {
+  const res = await fetch(`http://127.0.0.1:${PORT}/api/online/search?q=多结果`);
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  const sources = new Set(data.results.map((r) => r.source));
+  assert.equal(data.total, 20);
+  assert.equal(data.results.length, 20);
+  assert.ok(sources.has('netease'));
+  assert.ok(sources.has('migu'));
 });
 
 test('在线请求超过限速返回 429', async () => {

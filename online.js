@@ -234,9 +234,10 @@ async function downloadMiguTrack(song, destDir, fetchImpl) {
 async function searchOnline(q, { fetchImpl = fetch } = {}) {
   const [ne, mg] = await Promise.allSettled([neteaseSearch(q, fetchImpl), miguSearch(q, fetchImpl)]);
   const results = [];
-  // 咪咕优先展示：版权覆盖更全（如周杰伦原版），搜索结果先展示咪咕
-  if (mg.status === 'fulfilled') results.push(...mg.value);
-  if (ne.status === 'fulfilled') results.push(...ne.value);
+  // 咪咕优先展示：版权覆盖更全（如周杰伦原版），搜索结果先展示咪咕；
+  // 每源先各取 10 条，避免单源结果过多时把另一源完全挤出
+  if (mg.status === 'fulfilled') results.push(...mg.value.slice(0, 10));
+  if (ne.status === 'fulfilled') results.push(...ne.value.slice(0, 10));
   return {
     total: results.length,
     results: results.slice(0, 20),
