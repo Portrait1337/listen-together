@@ -117,14 +117,16 @@ function startStub() {
           });
         }
         if (text.includes('多结果')) {
+          const page = Number(u.searchParams.get('pageNo')) || 1;
+          const start = (page - 1) * 20;
           return sendJson(200, {
             code: '000000',
             songResultData: {
-              result: Array.from({ length: 24 }, (_, i) => ({
-                id: String(700 + i),
-                contentId: 'c' + (700 + i),
-                copyrightId: 'cr' + (700 + i),
-                name: `咪咕歌${i + 1}`,
+              result: Array.from({ length: 20 }, (_, i) => ({
+                id: String(700 + start + i),
+                contentId: 'c' + (700 + start + i),
+                copyrightId: 'cr' + (700 + start + i),
+                name: `咪咕歌${start + i + 1}`,
                 singers: [{ name: '歌手M' }],
                 albums: [{ name: '专辑M' }],
               })),
@@ -177,6 +179,14 @@ function startStub() {
             songListens: [{ url: `http://127.0.0.1:${server.address().port}/audio/flaky.wav` }],
           });
         }
+        if (audioId === '888' || audioId === '999') {
+          // 慢速正常下载（延迟 400ms），用于并发下载上限测试
+          return sendJson(200, {
+            code: '000000',
+            info: '成功',
+            songListens: [{ url: `http://127.0.0.1:${server.address().port}/audio/slow.wav` }],
+          });
+        }
         return sendJson(200, {
           code: '000000',
           info: '成功',
@@ -203,6 +213,14 @@ function startStub() {
         res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': WAV.length + 100 });
         res.write(WAV.subarray(0, 100));
         setTimeout(() => res.destroy(), 20);
+        return;
+      }
+      if (u.pathname === '/audio/slow.wav') {
+        // 慢速但正常的下载（延迟 400ms），用于并发下载上限测试
+        setTimeout(() => {
+          res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': WAV.length });
+          res.end(WAV);
+        }, 400);
         return;
       }
       sendJson(404, { error: 'not found' });
@@ -257,9 +275,9 @@ function startServer(extraEnv = {}, port = PORT) {
   });
 }
 
-function connectClient() {
+function connectClient(port = PORT) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
     const queue = [];
     const waiters = [];
     ws.on('message', (raw) => {
@@ -311,8 +329,8 @@ function connectClient() {
   });
 }
 
-async function addOnline(body) {
-  const res = await fetch(`http://127.0.0.1:${PORT}/api/online/add`, {
+async function addOnline(body, port = PORT) {
+  const res = await fetch(`http://127.0.0.1:${port}/api/online/add`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -363,8 +381,10 @@ test('单源结果过多时仍保证两个来源都可见', async () => {
   assert.equal(res.status, 200);
   const data = await res.json();
   const sources = new Set(data.results.map((r) => r.source));
-  assert.equal(data.total, 32); // 咪咕取 20 条 + 网易云 12 条
-  assert.equal(data.results.length, 32);
+  assert.equal(data.total, 72); // 咪咕 3 页 × 20 条 + 网易云 12 条
+  assert.equal(data.results.length, 72);
+  assert.equal(data.results.filter((r) => r.source === 'migu').length, 60);
+  assert.equal(data.results.filter((r) => r.source === 'netease').length, 12);
   assert.ok(sources.has('netease'));
   assert.ok(sources.has('migu'));
 });
@@ -540,4 +560,112 @@ test('下载中途断流返回 502、清理半成品文件且服务不崩溃', a
   const res = await fetch(`http://127.0.0.1:${PORT}/api/online/search?q=存活检查`);
   assert.equal(res.status, 200);
   await alice.close();
+});
+
+test('在线歌曲文件被外部删除后再次添加：自动重新下载且不崩溃', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitFor('room_created');
+  await alice.waitFor('state');
+
+  // 首次添加（netease:111 在更早的测试里已下载过，这里复用缓存）
+  const r1 = await addOnline({
+    roomId: created.code,
+    trackId: 'netease:111',
+    name: '测试歌',
+    artist: '测试歌手',
+    nickname: '小A',
+  });
+  assert.equal(r1.status, 200);
+
+  // 模拟外部删除下载文件（用户清理 library/online）
+  const file = path.join(libraryTmpDir, 'online', 'netease-111.mp3');
+  assert.ok(fs.existsSync(file), '下载文件应存在');
+  fs.unlinkSync(file);
+
+  // 再次添加：缓存命中但文件已删——修复前 statSync 抛 ENOENT 直接崩掉整个进程
+  const downloadsBefore = stub.counts.neteaseDownload;
+  const r2 = await addOnline({
+    roomId: created.code,
+    trackId: 'netease:111',
+    name: '测试歌',
+    artist: '测试歌手',
+    nickname: '小A',
+  });
+  assert.equal(r2.status, 200);
+  assert.ok(fs.existsSync(file), '文件应被重新下载');
+  assert.equal(stub.counts.neteaseDownload, downloadsBefore + 1, '应触发一次重新下载');
+
+  // 服务必须还活着
+  const res = await fetch(`http://127.0.0.1:${PORT}/api/online/search?q=存活检查`);
+  assert.equal(res.status, 200);
+  await alice.close();
+});
+
+test('并发下载超过上限返回 429，下载完成后槽位释放', async () => {
+  const dlPort = 20000 + crypto.randomInt(0, 30000);
+  const dlServer = await startServer(
+    {
+      ONLINE_MAX_CONCURRENT_DOWNLOADS: '1',
+      ONLINE_RATE_WINDOW_MS: '60000',
+      ONLINE_RATE_MAX: '1000',
+    },
+    dlPort
+  );
+  try {
+    const alice = await connectClient(dlPort);
+    alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+    const created = await alice.waitFor('room_created');
+    await alice.waitFor('state');
+
+    // 两个慢速下载（400ms）同时发起：并发上限 1，必然一个 200 一个 429
+    const [r1, r2] = await Promise.all([
+      addOnline({ roomId: created.code, trackId: 'migu:888:c888:cr888', name: '慢歌A', artist: '歌手', nickname: '小A' }, dlPort),
+      addOnline({ roomId: created.code, trackId: 'migu:999:c999:cr999', name: '慢歌B', artist: '歌手', nickname: '小A' }, dlPort),
+    ]);
+    const statuses = [r1.status, r2.status].sort();
+    assert.deepEqual(statuses, [200, 429], '并发下载应一个成功一个被限，实际: ' + statuses.join(','));
+
+    // 第一个下载完成后槽位释放：再添加应成功
+    const r3 = await addOnline({ roomId: created.code, trackId: 'migu:888:c888:cr888', name: '慢歌A', artist: '歌手', nickname: '小A' }, dlPort);
+    assert.equal(r3.status, 200);
+    await alice.close();
+  } finally {
+    dlServer.kill();
+  }
+});
+
+test('无人引用的在线下载文件被定期清理，有引用的保留', async () => {
+  const clPort = 20000 + crypto.randomInt(0, 30000);
+  const clServer = await startServer(
+    {
+      ONLINE_FILE_TTL_MS: '100',
+      ONLINE_CLEAN_INTERVAL_MS: '200',
+      ONLINE_RATE_WINDOW_MS: '60000',
+      ONLINE_RATE_MAX: '1000',
+    },
+    clPort
+  );
+  try {
+    const alice = await connectClient(clPort);
+    alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+    const created = await alice.waitFor('room_created');
+    await alice.waitFor('state');
+
+    const r1 = await addOnline({ roomId: created.code, trackId: 'migu:500:c500:cr500', name: '缓存歌', artist: '歌手', nickname: '小A' }, clPort);
+    assert.equal(r1.status, 200);
+    const file = path.join(libraryTmpDir, 'online', 'migu-500.mp3');
+    assert.ok(fs.existsSync(file), '下载文件应存在');
+
+    // 房间还引用着：过了多个清理周期文件必须保留
+    await new Promise((r) => setTimeout(r, 700));
+    assert.ok(fs.existsSync(file), '有引用时不应被清理');
+
+    // 退出房间，等房间销毁（ACTIVE_ROOM_TTL 3000ms）后文件失去引用，下个清理周期删除
+    await alice.close();
+    await new Promise((r) => setTimeout(r, 3700));
+    assert.ok(!fs.existsSync(file), '无引用且超 TTL 后应被清理');
+  } finally {
+    clServer.kill();
+  }
 });

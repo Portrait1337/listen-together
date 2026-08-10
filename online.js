@@ -101,7 +101,7 @@ async function resolveNeteaseVipUrl(id, fetchImpl = fetch) {
 }
 
 async function neteaseSearch(q, fetchImpl) {
-  const url = `${NETEASE_BASE}/api/search/get/web?s=${encodeURIComponent(q)}&type=1&limit=20`;
+  const url = `${NETEASE_BASE}/api/search/get/web?s=${encodeURIComponent(q)}&type=1&limit=50`;
   const data = await httpJson(url, fetchImpl);
   const songs = (data && data.result && data.result.songs) || [];
   return songs.map((s) => ({
@@ -118,18 +118,29 @@ async function neteaseSearch(q, fetchImpl) {
 }
 
 async function miguSearch(q, fetchImpl) {
-  const params = new URLSearchParams({
-    ua: 'Android_migu',
-    version: '5.1',
-    text: q,
-    pageNo: '1',
-    pageSize: '20',
-    searchSwitch: JSON.stringify({ song: 1 }),
-  });
-  const url = `${MIGU_BASE}/MIGUM2.0/v1.0/content/search_all.do?${params}`;
-  const data = await httpJson(url, fetchImpl);
-  const list = (data && data.songResultData && data.songResultData.result) || [];
-  return list.map((s) => ({
+  // 咪咕每页最多 20 条：连续取 3 页，某页失败或不足一页就提前停
+  const all = [];
+  for (let page = 1; page <= 3; page += 1) {
+    let list;
+    try {
+      const params = new URLSearchParams({
+        ua: 'Android_migu',
+        version: '5.1',
+        text: q,
+        pageNo: String(page),
+        pageSize: '20',
+        searchSwitch: JSON.stringify({ song: 1 }),
+      });
+      const url = `${MIGU_BASE}/MIGUM2.0/v1.0/content/search_all.do?${params}`;
+      const data = await httpJson(url, fetchImpl);
+      list = (data && data.songResultData && data.songResultData.result) || [];
+    } catch {
+      break;
+    }
+    all.push(...list);
+    if (list.length < 20) break;
+  }
+  return all.map((s) => ({
     id: `migu:${s.id}:${s.contentId}:${s.copyrightId}`,
     source: 'migu',
     name: String(s.name || ''),
@@ -221,14 +232,18 @@ function pickMiguFallback(results, name, artist) {
 }
 
 async function downloadMiguTrack(song, destDir, fetchImpl) {
+  // 第三方返回的歌曲 id 必须与 parseTrackId 同一字符集：
+  // 换源分支直接信任搜索结果里的原始 id，若含路径分隔符会拼进文件名造成路径穿越
+  const rawId = String((song && song.id) || '');
+  if (!/^[0-9A-Za-z]+$/.test(rawId)) return { error: '歌曲标识无效' };
   const url = await miguResolveUrl(
-    { audioId: song.id, contentId: song.contentId, copyrightId: song.copyrightId },
+    { audioId: rawId, contentId: song.contentId, copyrightId: song.copyrightId },
     fetchImpl
   );
   if (!url) return { error: '该歌曲受版权或会员限制，暂时无法播放' };
-  const file = `migu-${String(song.id)}.mp3`;
+  const file = `migu-${rawId}.mp3`;
   await downloadAudio(url, path.join(destDir, file), fetchImpl);
-  return { file, provider: 'migu', name: song.name || `咪咕歌曲 ${song.id}` };
+  return { file, provider: 'migu', name: song.name || `咪咕歌曲 ${rawId}` };
 }
 
 async function searchOnline(q, { fetchImpl = fetch } = {}) {
@@ -246,8 +261,8 @@ async function searchOnline(q, { fetchImpl = fetch } = {}) {
   };
   // 咪咕优先展示：版权覆盖更全（如周杰伦原版），搜索结果先展示咪咕；
   // 每源最多 20 条，避免单源结果过多时把另一源完全挤出
-  if (mg.status === 'fulfilled') pushUnique(mg.value.slice(0, 20));
-  if (ne.status === 'fulfilled') pushUnique(ne.value.slice(0, 20));
+  if (mg.status === 'fulfilled') pushUnique(mg.value.slice(0, 60));
+  if (ne.status === 'fulfilled') pushUnique(ne.value.slice(0, 50));
   return {
     total: results.length,
     results,
