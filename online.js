@@ -101,7 +101,7 @@ async function resolveNeteaseVipUrl(id, fetchImpl = fetch) {
 }
 
 async function neteaseSearch(q, fetchImpl) {
-  const url = `${NETEASE_BASE}/api/search/get/web?s=${encodeURIComponent(q)}&type=1&limit=12`;
+  const url = `${NETEASE_BASE}/api/search/get/web?s=${encodeURIComponent(q)}&type=1&limit=20`;
   const data = await httpJson(url, fetchImpl);
   const songs = (data && data.result && data.result.songs) || [];
   return songs.map((s) => ({
@@ -123,7 +123,7 @@ async function miguSearch(q, fetchImpl) {
     version: '5.1',
     text: q,
     pageNo: '1',
-    pageSize: '8',
+    pageSize: '20',
     searchSwitch: JSON.stringify({ song: 1 }),
   });
   const url = `${MIGU_BASE}/MIGUM2.0/v1.0/content/search_all.do?${params}`;
@@ -234,13 +234,23 @@ async function downloadMiguTrack(song, destDir, fetchImpl) {
 async function searchOnline(q, { fetchImpl = fetch } = {}) {
   const [ne, mg] = await Promise.allSettled([neteaseSearch(q, fetchImpl), miguSearch(q, fetchImpl)]);
   const results = [];
+  const seen = new Set();
+  const pushUnique = (list) => {
+    for (const t of list) {
+      // 按“歌名+歌手”去重：同歌不同源只保留先出现的（咪咕优先）
+      const key = (t.name + '|' + t.artist).toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push(t);
+    }
+  };
   // 咪咕优先展示：版权覆盖更全（如周杰伦原版），搜索结果先展示咪咕；
-  // 每源先各取 10 条，避免单源结果过多时把另一源完全挤出
-  if (mg.status === 'fulfilled') results.push(...mg.value.slice(0, 10));
-  if (ne.status === 'fulfilled') results.push(...ne.value.slice(0, 10));
+  // 每源最多 20 条，避免单源结果过多时把另一源完全挤出
+  if (mg.status === 'fulfilled') pushUnique(mg.value.slice(0, 20));
+  if (ne.status === 'fulfilled') pushUnique(ne.value.slice(0, 20));
   return {
     total: results.length,
-    results: results.slice(0, 20),
+    results,
     degraded: ne.status !== 'fulfilled' || mg.status !== 'fulfilled',
   };
 }

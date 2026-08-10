@@ -55,6 +55,16 @@ function startStub() {
             },
           });
         }
+        if ((u.searchParams.get('s') || '').includes('重复')) {
+          return sendJson(200, {
+            result: {
+              songs: [
+                { id: 111, name: '同一首歌', artists: [{ name: '同歌手' }], album: { name: '专辑A' }, duration: 1000, fee: 0 },
+                { id: 112, name: '另一首', artists: [{ name: '同歌手' }], album: { name: '专辑B' }, duration: 1000, fee: 0 },
+              ],
+            },
+          });
+        }
         return sendJson(200, {
           result: {
             songs: [
@@ -81,6 +91,31 @@ function startStub() {
       if (u.pathname === '/MIGUM2.0/v1.0/content/search_all.do') {
         counts.miguSearch += 1;
         const text = u.searchParams.get('text') || '';
+        if (text.includes('重复')) {
+          return sendJson(200, {
+            code: '000000',
+            songResultData: {
+              result: [
+                {
+                  id: '500',
+                  contentId: 'c500',
+                  copyrightId: 'cr500',
+                  name: '同一首歌',
+                  singers: [{ name: '同歌手' }],
+                  albums: [{ name: '专辑M1' }],
+                },
+                {
+                  id: '501',
+                  contentId: 'c501',
+                  copyrightId: 'cr501',
+                  name: '第三首',
+                  singers: [{ name: '同歌手' }],
+                  albums: [{ name: '专辑M2' }],
+                },
+              ],
+            },
+          });
+        }
         if (text.includes('多结果')) {
           return sendJson(200, {
             code: '000000',
@@ -306,14 +341,12 @@ test('在线搜索合并网易云与咪咕结果，会员歌标记不可播', as
   const res = await fetch(`http://127.0.0.1:${PORT}/api/online/search?q=测试`);
   assert.equal(res.status, 200);
   const data = await res.json();
-  assert.equal(data.total, 3);
+  assert.equal(data.total, 2); // 网易云《测试歌》与咪咕同歌去重，保留咪咕
   assert.equal(data.results[0].source, 'migu'); // 咪咕优先展示
   assert.equal(data.results[0].name, '测试歌');
   assert.equal(data.results[0].playable, true);
   assert.equal(data.results[1].source, 'netease');
-  assert.equal(data.results[1].playable, true);
-  assert.equal(data.results[2].source, 'netease');
-  assert.equal(data.results[2].playable, false);
+  assert.equal(data.results[1].playable, false); // 会员歌
 });
 
 test('在线搜索结果缓存 60 秒，重复搜索不重复请求第三方', async () => {
@@ -330,10 +363,18 @@ test('单源结果过多时仍保证两个来源都可见', async () => {
   assert.equal(res.status, 200);
   const data = await res.json();
   const sources = new Set(data.results.map((r) => r.source));
-  assert.equal(data.total, 20);
-  assert.equal(data.results.length, 20);
+  assert.equal(data.total, 32); // 咪咕取 20 条 + 网易云 12 条
+  assert.equal(data.results.length, 32);
   assert.ok(sources.has('netease'));
   assert.ok(sources.has('migu'));
+});
+
+test('搜索结果按歌名+歌手去重', async () => {
+  const res = await fetch(`http://127.0.0.1:${PORT}/api/online/search?q=重复`);
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  const names = data.results.map((r) => r.name).sort();
+  assert.deepEqual(names, ['另一首', '同一首歌', '第三首']);
 });
 
 test('在线请求超过限速返回 429', async () => {
