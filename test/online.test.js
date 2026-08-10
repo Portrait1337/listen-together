@@ -278,12 +278,13 @@ test('在线搜索合并网易云与咪咕结果，会员歌标记不可播', as
   assert.equal(res.status, 200);
   const data = await res.json();
   assert.equal(data.total, 3);
-  assert.equal(data.results[0].source, 'netease');
+  assert.equal(data.results[0].source, 'migu'); // 咪咕优先展示
   assert.equal(data.results[0].name, '测试歌');
   assert.equal(data.results[0].playable, true);
-  assert.equal(data.results[1].playable, false);
-  assert.equal(data.results[2].source, 'migu');
-  assert.equal(data.results[2].playable, true);
+  assert.equal(data.results[1].source, 'netease');
+  assert.equal(data.results[1].playable, true);
+  assert.equal(data.results[2].source, 'netease');
+  assert.equal(data.results[2].playable, false);
 });
 
 test('在线搜索结果缓存 60 秒，重复搜索不重复请求第三方', async () => {

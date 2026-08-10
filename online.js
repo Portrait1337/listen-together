@@ -185,8 +185,9 @@ async function downloadMiguTrack(song, destDir, fetchImpl) {
 async function searchOnline(q, { fetchImpl = fetch } = {}) {
   const [ne, mg] = await Promise.allSettled([neteaseSearch(q, fetchImpl), miguSearch(q, fetchImpl)]);
   const results = [];
-  if (ne.status === 'fulfilled') results.push(...ne.value);
+  // 咪咕优先展示：版权覆盖更全（如周杰伦原版），搜索结果先展示咪咕
   if (mg.status === 'fulfilled') results.push(...mg.value);
+  if (ne.status === 'fulfilled') results.push(...ne.value);
   return {
     total: results.length,
     results: results.slice(0, 20),

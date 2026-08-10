@@ -67,7 +67,7 @@
 // { id, source: 'netease'|'migu', name, artist, album, durationMs, coverUrl, playable }
 
 module.exports = {
-  search(q),          // 并行搜索两源，合并返回（网易云优先排序）
+  search(q),          // 并行搜索两源，合并返回（咪咕优先排序，版权覆盖更全）
   resolveAndDownload(track, destDir),  // 按 网易云→咪咕 顺序取音频并下载
 };
 ```
