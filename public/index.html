@@ -3,91 +3,135 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#12100d">
   <title>一起听</title>
-  <link rel="stylesheet" href="/styles.css?v=20260813">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='46' fill='%2312100d'/%3E%3Ccircle cx='50' cy='50' r='20' fill='%23f5a623'/%3E%3Ccircle cx='50' cy='50' r='6' fill='%2312100d'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css?v=20260811">
 </head>
 <body>
-  <div id="landing" class="screen">
-    <h1>🎧 一起听</h1>
-    <p class="sub">和群友同步听同一段音频</p>
-    <input id="nickname" type="text" placeholder="你的昵称" autocomplete="nickname">
-    <input id="roomCode" type="text" placeholder="房间码（加入时填）" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="6">
-    <div class="row">
-      <button id="createBtn">创建房间</button>
-      <button id="joinBtn" class="secondary">加入房间</button>
+  <!-- 首页：创建 / 加入房间 -->
+  <div id="landing" class="screen screen-landing">
+    <div class="hero">
+      <div class="hero-disc" aria-hidden="true">
+        <div class="disc-grooves"></div>
+        <div class="disc-label"><span>一起听</span></div>
+        <div class="disc-hole"></div>
+      </div>
+      <h1 class="brand">一起听</h1>
+      <p class="sub">建个房间，和群友同步听同一段音频</p>
     </div>
-    <p id="landingHint" class="hint"></p>
+
+    <div class="card landing-card">
+      <label class="field" for="nickname">
+        <span class="field-label">你的昵称</span>
+        <input id="nickname" type="text" placeholder="怎么称呼你" autocomplete="nickname">
+      </label>
+      <label class="field" for="roomCode">
+        <span class="field-label">房间码（加入时填）</span>
+        <input id="roomCode" type="text" placeholder="6 位房间码" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="6" inputmode="text">
+      </label>
+      <div class="row">
+        <button id="createBtn" class="primary">创建房间</button>
+        <button id="joinBtn" class="secondary">加入房间</button>
+      </div>
+      <p id="landingHint" class="hint" role="status" aria-live="polite"></p>
+    </div>
+
+    <ul class="features" aria-label="功能">
+      <li><span class="feat-dot">♪</span>全房间同步播放</li>
+      <li><span class="feat-dot">＋</span>上传 / 曲库 / 在线搜索</li>
+      <li><span class="feat-dot">○</span>房内聊天</li>
+    </ul>
   </div>
 
-  <div id="room" class="screen hidden">
-    <div class="room-head">
-      <div>
-        <div class="room-title">房间 <b id="roomCodeLabel">-</b></div>
-        <div class="room-meta"><span id="memberCount">0</span> 人在听</div>
+  <!-- 房间页 -->
+  <div id="room" class="screen screen-room hidden">
+    <header class="room-head">
+      <div class="room-id">
+        <span class="room-label">房间号</span>
+        <div class="room-code-row">
+          <span id="roomCodeLabel" class="room-code">······</span>
+          <button id="copyBtn" class="small" aria-label="复制房间号">复制房间号</button>
+        </div>
       </div>
-      <div class="head-btns">
-        <button id="copyBtn" class="small">复制房间号</button>
-        <button id="leaveBtn" class="small danger">退出房间</button>
-      </div>
+      <button id="leaveBtn" class="small danger">退出房间</button>
+    </header>
+
+    <div class="room-subhead">
+      <span class="listening"><b id="memberCount">0</b> 人在听</span>
+      <div id="memberList" class="members"></div>
     </div>
 
-    <div class="card">
+    <!-- 正在播放 -->
+    <div class="card player-card">
       <div class="now-playing">
-        <div id="nowPlaying">还没有音频</div>
-        <div id="nowUploader" class="muted"></div>
+        <div id="vinyl" class="disc disc-mini" aria-hidden="true">
+          <div class="disc-grooves"></div>
+          <div class="disc-label"><span id="vinylLabel">♪</span></div>
+          <div class="disc-hole"></div>
+        </div>
+        <div class="now-copy">
+          <div id="nowPlaying" class="now-title">还没有音频</div>
+          <div id="nowUploader" class="muted"></div>
+        </div>
       </div>
-      <input id="seek" type="range" min="0" max="0" value="0" step="1">
+      <input id="seek" type="range" min="0" max="0" value="0" step="1" aria-label="播放进度">
       <div class="time-row"><span id="timeLabel">0:00 / 0:00</span></div>
       <div class="controls">
-        <button id="prevBtn" class="icon" aria-label="上一首">⏮</button>
-        <button id="playBtn" class="icon big" aria-label="播放/暂停">▶</button>
-        <button id="nextBtn" class="icon" aria-label="下一首">⏭</button>
+        <button id="prevBtn" class="control" aria-label="上一首">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h2.2v14H6zM17.2 5.2v13.6L8.4 12z"/></svg>
+        </button>
+        <button id="playBtn" class="control play" aria-label="播放/暂停" data-playing="false">
+          <svg class="ic ic-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8.5 5.4v13.2L19 12z"/></svg>
+          <svg class="ic ic-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5h3.4v14H7zM13.6 5H17v14h-3.4z"/></svg>
+        </button>
+        <button id="nextBtn" class="control" aria-label="下一首">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.8 5H18v14h-2.2zM6.8 5.2v13.6L15.6 12z"/></svg>
+        </button>
       </div>
     </div>
 
-    <div class="card">
+    <!-- 播放列表 -->
+    <div class="card queue-card">
       <div class="card-head">
-        <span>播放列表</span>
-        <div>
-          <button id="modeBtn" class="small">顺序</button>
+        <span class="head-title">播放列表 <span id="queueCount" class="count">0</span></span>
+        <div class="head-btns">
+          <button id="modeBtn" class="small mode-btn" aria-label="切换播放模式">顺序</button>
           <button id="uploadBtn" class="small">上传音频</button>
         </div>
         <input id="fileInput" type="file" accept="audio/*,.m4a" hidden>
       </div>
-      <div class="search-tabs">
-        <button id="tabLocal" class="tab active" type="button">本地曲库</button>
-        <button id="tabOnline" class="tab" type="button">在线音乐</button>
+      <div class="search-tabs" role="tablist">
+        <button id="tabLocal" class="tab active" type="button" role="tab" aria-selected="true">本地曲库</button>
+        <button id="tabOnline" class="tab" type="button" role="tab" aria-selected="false">在线音乐</button>
       </div>
       <div class="search-row">
-        <input id="librarySearch" type="text" placeholder="搜索本地曲库…" autocomplete="off">
+        <input id="librarySearch" type="text" placeholder="搜索本地曲库…" autocomplete="off" aria-label="搜索音乐">
       </div>
-      <div id="platformTabs" class="platform-tabs hidden">
-        <button id="platNetease" class="tab active" type="button">网易云</button>
-        <button id="platMigu" class="tab" type="button">咪咕</button>
+      <div id="platformTabs" class="platform-tabs hidden" role="tablist">
+        <button id="platNetease" class="tab active" type="button" role="tab" aria-selected="true">网易云</button>
+        <button id="platMigu" class="tab" type="button" role="tab" aria-selected="false">咪咕</button>
       </div>
       <div id="libraryResults" class="library-results hidden"></div>
       <div id="playlist" class="playlist"></div>
     </div>
 
-    <div class="card">
-      <div class="card-head"><span>房内聊天</span></div>
-      <div id="chatList" class="chat-list"></div>
+    <!-- 房内聊天 -->
+    <div class="card chat-card">
+      <div class="card-head"><span class="head-title">房内聊天</span></div>
+      <div id="chatList" class="chat-list" aria-live="polite"></div>
       <div class="chat-input-row">
-        <input id="chatInput" type="text" placeholder="说点什么…" maxlength="200">
-        <button id="chatSend" class="small">发送</button>
+        <input id="chatInput" type="text" placeholder="说点什么…" maxlength="200" aria-label="聊天内容">
+        <button id="chatSend" class="small send-btn">发送</button>
       </div>
-    </div>
-
-    <div class="card">
-      <div class="card-head"><span>成员</span></div>
-      <div id="memberList" class="members"></div>
     </div>
   </div>
 
-  <div id="unlock" class="hidden">
+  <!-- 浏览器自动播放限制的解锁层 -->
+  <div id="unlock" class="hidden" role="button" tabindex="0" aria-label="点击开始听">
     <div class="box">
-      <div class="big-icon">🔊</div>
-      <div>点击开始听</div>
+      <div class="big-icon">♪</div>
+      <div class="unlock-title">点击开始听</div>
       <div class="muted small-text">加入一起听，跟着大家同步播放</div>
     </div>
   </div>
@@ -95,7 +139,7 @@
   <!-- 主播放器：必须挂在页面上，iOS 浏览器才允许它真正出声 -->
   <audio id="player" playsinline webkit-playsinline preload="auto"></audio>
 
-  <script src="/sync-policy.js?v=20260813"></script>
-  <script src="/app.js?v=20260813"></script>
+  <script src="/sync-policy.js?v=20260811"></script>
+  <script src="/app.js?v=20260811"></script>
 </body>
 </html>

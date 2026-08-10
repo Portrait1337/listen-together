@@ -15,6 +15,8 @@ const ui = {
   memberList: $('memberList'),
   nowPlaying: $('nowPlaying'),
   nowUploader: $('nowUploader'),
+  vinyl: $('vinyl'),
+  vinylLabel: $('vinylLabel'),
   playBtn: $('playBtn'),
   prevBtn: $('prevBtn'),
   nextBtn: $('nextBtn'),
@@ -31,6 +33,7 @@ const ui = {
   fileInput: $('fileInput'),
   uploadBtn: $('uploadBtn'),
   modeBtn: $('modeBtn'),
+  queueCount: $('queueCount'),
   chatList: $('chatList'),
   chatInput: $('chatInput'),
   chatSend: $('chatSend'),
@@ -441,8 +444,14 @@ function renderPlaylist() {
   (state?.playlist || []).forEach((t, i) => {
     const item = document.createElement('div');
     item.className = 'track' + (i === state.currentIndex ? ' active' : '');
+    const idx = document.createElement('span');
+    idx.className = 'track-index';
+    idx.textContent = String(i + 1).padStart(2, '0');
     const play = document.createElement('button');
-    play.textContent = '▶';
+    play.className = 'track-play';
+    play.setAttribute('aria-label', '播放 ' + t.name);
+    play.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8.5 5.4v13.2L19 12z"/></svg>';
     play.addEventListener('click', () => sendControl('select', { index: i }));
     const name = document.createElement('span');
     name.className = 'track-name';
@@ -460,9 +469,10 @@ function renderPlaylist() {
         send({ type: 'remove_track', trackId: t.id });
       }
     });
-    item.append(play, name, meta, del);
+    item.append(idx, play, name, meta, del);
     ui.playlist.append(item);
   });
+  if (ui.queueCount) ui.queueCount.textContent = String(state?.playlist?.length || 0);
 }
 
 function renderNowPlaying() {
@@ -476,7 +486,15 @@ function renderNowPlaying() {
     ui.nowPlaying.textContent = '还没有音频';
     ui.nowUploader.textContent = '上传一段音频，大家就能一起听了';
   }
-  ui.playBtn.textContent = state?.playing ? '⏸' : '▶';
+  const playing = state?.playing === true;
+  ui.playBtn.dataset.playing = playing ? 'true' : 'false';
+  ui.playBtn.setAttribute('aria-label', playing ? '暂停' : '播放');
+  if (ui.vinyl) {
+    ui.vinyl.classList.toggle('spinning', playing && !!track);
+    if (ui.vinylLabel) {
+      ui.vinylLabel.textContent = track ? track.name.trim().charAt(0) || '♪' : '♪';
+    }
+  }
 }
 
 function renderMembers() {
@@ -485,9 +503,17 @@ function renderMembers() {
   members.forEach((m) => {
     const chip = document.createElement('span');
     chip.className = 'member';
+    chip.style.setProperty('--hue', memberHue(m.nickname) + 'deg');
     chip.textContent = m.nickname;
     ui.memberList.append(chip);
   });
+}
+
+// 昵称生成一个稳定的色相，成员头像点用同色系
+function memberHue(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+  return h;
 }
 
 function fmt(ms) {
@@ -510,6 +536,8 @@ function renderTime() {
       ? Math.min(Math.round(cur), Math.floor(audio.duration * 1000))
       : Math.round(cur);
   }
+  const pct = ui.seek.max > 0 ? Math.min(100, (cur / ui.seek.max) * 100) : 0;
+  ui.seek.style.setProperty('--seek-pct', pct + '%');
 }
 
 // ---------- 聊天 ----------
@@ -582,6 +610,8 @@ function setSearchTab(tab) {
   searchTab = tab;
   ui.tabLocal.classList.toggle('active', tab === 'local');
   ui.tabOnline.classList.toggle('active', tab === 'online');
+  ui.tabLocal.setAttribute('aria-selected', tab === 'local' ? 'true' : 'false');
+  ui.tabOnline.setAttribute('aria-selected', tab === 'online' ? 'true' : 'false');
   ui.platformTabs.classList.toggle('hidden', tab !== 'online');
   ui.librarySearch.placeholder = tab === 'local' ? '搜索本地曲库…' : '搜索在线音乐…';
   ui.librarySearch.value = '';
@@ -596,6 +626,8 @@ function setOnlineSource(source) {
   onlineSource = source;
   ui.platNetease.classList.toggle('active', source === 'netease');
   ui.platMigu.classList.toggle('active', source === 'migu');
+  ui.platNetease.setAttribute('aria-selected', source === 'netease' ? 'true' : 'false');
+  ui.platMigu.setAttribute('aria-selected', source === 'migu' ? 'true' : 'false');
   onlineOffset = 0;
   onlineHasMore = false;
   ui.libraryResults.classList.add('hidden');
