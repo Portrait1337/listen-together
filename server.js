@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
 const { WebSocketServer, WebSocket } = require('ws');
+const online = require('./online');
 
 const PORT = process.env.PORT || 3000;
 const MAX_UPLOAD = 200 * 1024 * 1024; // 200MB
@@ -24,6 +25,11 @@ const UPLOAD_DIR = process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR)
 const LIBRARY_DIR = process.env.LIBRARY_DIR ? path.resolve(process.env.LIBRARY_DIR) : path.join(__dirname, 'library');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 fs.mkdirSync(LIBRARY_DIR, { recursive: true });
+const ONLINE_DIR = path.join(LIBRARY_DIR, 'online');
+fs.mkdirSync(ONLINE_DIR, { recursive: true });
+const ONLINE_CACHE_TTL_MS = Number(process.env.ONLINE_CACHE_TTL_MS) || 60000;
+const ONLINE_RATE_WINDOW_MS = Number(process.env.ONLINE_RATE_WINDOW_MS) || 10000;
+const ONLINE_RATE_MAX = Number(process.env.ONLINE_RATE_MAX) || 10;
 
 const app = express();
 // 只信任本机隧道（cpolar/cloudflared 都在本机跑）写入的 X-Forwarded-For：
@@ -105,6 +111,23 @@ function clientIp(req) {
   // 不直接信任客户端自报的 X-Forwarded-For：
   // trust proxy 只对 loopback（本机隧道）放开 XFF，公网直连时 req.ip 就是 socket 真实地址
   return req.ip || req.socket.remoteAddress || 'unknown';
+}
+
+// ---------- 在线音乐：限速、搜索缓存、已下载复用 ----------
+const onlineHits = new Map(); // ip -> [时间戳]
+const onlineCache = new Map(); // q -> { at, data }
+const onlineFiles = new Map(); // "provider:remoteId" -> 文件名
+
+function checkOnlineRate(ip) {
+  const now = Date.now();
+  const arr = (onlineHits.get(ip) || []).filter((t) => now - t < ONLINE_RATE_WINDOW_MS);
+  if (arr.length >= ONLINE_RATE_MAX) {
+    onlineHits.set(ip, arr);
+    return false;
+  }
+  arr.push(now);
+  onlineHits.set(ip, arr);
+  return true;
 }
 
 function beginUpload(req, res, next) {
@@ -309,6 +332,69 @@ app.post('/api/library/add', (req, res) => {
     size: entry.size,
     uploader: String(req.body.nickname || '匿名').trim().slice(0, 20) || '匿名',
     fromLibrary: true,
+  };
+  room.playlist.push(track);
+  if (room.currentIndex < 0) {
+    room.currentIndex = 0;
+    room.positionMs = 0;
+    room.updatedAt = Date.now();
+  }
+  broadcast(room, snapshot(room));
+  res.json({ ok: true, track });
+});
+
+// ---------- 在线音乐：搜索与添加 ----------
+app.get('/api/online/search', async (req, res) => {
+  if (!checkOnlineRate(clientIp(req))) {
+    return res.status(429).json({ error: '请求太频繁，请稍后再试' });
+  }
+  const q = String(req.query.q || '').trim().slice(0, 100);
+  if (!q) return res.status(400).json({ error: '请输入搜索关键词' });
+  const cached = onlineCache.get(q);
+  if (cached && Date.now() - cached.at < ONLINE_CACHE_TTL_MS) return res.json(cached.data);
+  try {
+    const data = await online.searchOnline(q);
+    onlineCache.set(q, { at: Date.now(), data });
+    if (onlineCache.size > 200) onlineCache.delete(onlineCache.keys().next().value);
+    res.json(data);
+  } catch {
+    res.status(502).json({ error: '在线曲库暂时不可用，请稍后再试' });
+  }
+});
+
+app.post('/api/online/add', async (req, res) => {
+  if (!checkOnlineRate(clientIp(req))) {
+    return res.status(429).json({ error: '请求太频繁，请稍后再试' });
+  }
+  const room = rooms.get(String(req.body.roomId || '').toUpperCase().trim());
+  if (!room) return res.status(404).json({ error: '房间不存在，请重新加入' });
+  const trackId = String(req.body.trackId || '');
+  const name = String(req.body.name || '').trim().slice(0, 200);
+  const artist = String(req.body.artist || '').trim().slice(0, 200);
+  const parsed = online.parseTrackId(trackId);
+  if (!parsed) return res.status(400).json({ error: '无效的歌曲标识' });
+  const cacheKey =
+    parsed.source + ':' + (parsed.source === 'netease' ? parsed.neteaseId : parsed.audioId);
+  let file = onlineFiles.get(cacheKey);
+  let trackName = name;
+  let provider = parsed.source;
+  if (!file) {
+    const done = await online.resolveAndDownloadOnline(trackId, name, artist, ONLINE_DIR);
+    if (done.error) return res.status(502).json({ error: done.error });
+    file = done.file;
+    trackName = done.name || name;
+    provider = done.provider;
+    onlineFiles.set(cacheKey, file);
+  }
+  const track = {
+    id: crypto.randomBytes(6).toString('hex'),
+    name: trackName,
+    url: '/library/online/' + encodeURIComponent(file),
+    size: fs.statSync(path.join(ONLINE_DIR, file)).size,
+    uploader: String(req.body.nickname || '匿名').trim().slice(0, 20) || '匿名',
+    source: 'online',
+    provider,
+    remoteId: cacheKey,
   };
   room.playlist.push(track);
   if (room.currentIndex < 0) {
