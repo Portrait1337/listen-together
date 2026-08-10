@@ -145,25 +145,30 @@ async function downloadAudio(url, dest, fetchImpl) {
   const len = Number(res.headers.get('content-length') || 0);
   if (len > MAX_SIZE) throw new Error('文件过大');
   const tmp = dest + '.tmp';
-  await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(tmp));
-  const st = fs.statSync(tmp);
-  if (st.size < 1024 || st.size > MAX_SIZE) {
-    fs.unlinkSync(tmp);
-    throw new Error('文件大小异常');
+  try {
+    await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(tmp));
+    const st = fs.statSync(tmp);
+    if (st.size < 1024 || st.size > MAX_SIZE) throw new Error('文件大小异常');
+    fs.renameSync(tmp, dest);
+    return st.size;
+  } catch (e) {
+    // 下载中断/校验失败时清掉半成品，避免残留 .tmp 文件
+    fs.unlink(tmp, () => {});
+    throw e;
   }
-  fs.renameSync(tmp, dest);
-  return st.size;
 }
 
 function pickMiguFallback(results, name, artist) {
   const n = String(name || '').toLowerCase();
   const a = String(artist || '').toLowerCase();
-  const hit = results.find(
+  // 只接受歌名匹配的结果，避免换源换成另一首歌
+  return (
+    results.find(
     (r) =>
       r.name.toLowerCase().includes(n) &&
       (!a || r.artist.toLowerCase().includes(a) || a.includes(r.artist.toLowerCase()))
+    ) || null
   );
-  return hit || results[0] || null;
 }
 
 async function downloadMiguTrack(song, destDir, fetchImpl) {

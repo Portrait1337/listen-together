@@ -121,8 +121,10 @@ const onlineFiles = new Map(); // "provider:remoteId" -> 文件名
 function checkOnlineRate(ip) {
   const now = Date.now();
   const arr = (onlineHits.get(ip) || []).filter((t) => now - t < ONLINE_RATE_WINDOW_MS);
+  // 窗口内没有请求记录时清掉 key，避免限速表随 IP 数量无限增长
+  if (arr.length === 0) onlineHits.delete(ip);
+  else onlineHits.set(ip, arr);
   if (arr.length >= ONLINE_RATE_MAX) {
-    onlineHits.set(ip, arr);
     return false;
   }
   arr.push(now);
@@ -379,7 +381,13 @@ app.post('/api/online/add', async (req, res) => {
   let trackName = name;
   let provider = parsed.source;
   if (!file) {
-    const done = await online.resolveAndDownloadOnline(trackId, name, artist, ONLINE_DIR);
+    let done;
+    try {
+      done = await online.resolveAndDownloadOnline(trackId, name, artist, ONLINE_DIR);
+    } catch {
+      // 下载/接口异常（超时、断流、第三方出错）不能拖垮服务，统一按暂时不可用返回
+      return res.status(502).json({ error: '在线曲库暂时不可用，请稍后再试' });
+    }
     if (done.error) return res.status(502).json({ error: done.error });
     file = done.file;
     trackName = done.name || name;

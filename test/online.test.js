@@ -70,6 +70,23 @@ function startStub() {
         if (text.includes('找不到')) {
           return sendJson(200, { code: '000000', songResultData: { result: [] } });
         }
+        if (text.includes('不匹配')) {
+          return sendJson(200, {
+            code: '000000',
+            songResultData: {
+              result: [
+                {
+                  id: '444',
+                  contentId: 'c444',
+                  copyrightId: 'cr444',
+                  name: '另一首歌',
+                  singers: [{ name: '别人' }],
+                  albums: [{ name: '专辑X' }],
+                },
+              ],
+            },
+          });
+        }
         return sendJson(200, {
           code: '000000',
           songResultData: {
@@ -78,8 +95,8 @@ function startStub() {
                 id: '333',
                 contentId: 'c333',
                 copyrightId: 'cr333',
-                name: '测试歌',
-                singers: [{ name: '测试歌手' }],
+                name: text.includes('会员歌') ? '会员歌' : '测试歌',
+                singers: [{ name: text.includes('会员歌') ? '会员歌手' : '测试歌手' }],
                 albums: [{ name: '专辑M' }],
               },
             ],
@@ -88,6 +105,14 @@ function startStub() {
       }
       if (u.pathname === '/MIGUM3.0/v1.0/content/sub/listen.do') {
         counts.miguListen += 1;
+        const audioId = u.searchParams.get('audioId') || '';
+        if (audioId === '777') {
+          return sendJson(200, {
+            code: '000000',
+            info: '成功',
+            songListens: [{ url: `http://127.0.0.1:${server.address().port}/audio/flaky.wav` }],
+          });
+        }
         return sendJson(200, {
           code: '000000',
           info: '成功',
@@ -97,7 +122,7 @@ function startStub() {
       if (u.pathname.startsWith('/song/media/outer/url')) {
         counts.neteaseDownload += 1;
         const id = u.searchParams.get('id') || '';
-        if (id.startsWith('222') || id.startsWith('999')) {
+        if (id.startsWith('222') || id.startsWith('555') || id.startsWith('999')) {
           res.writeHead(200, { 'Content-Type': 'text/html;charset=utf8' });
           return res.end('<html>受限</html>');
         }
@@ -108,6 +133,13 @@ function startStub() {
         counts.miguDownload += 1;
         res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': WAV.length });
         return res.end(WAV);
+      }
+      if (u.pathname === '/audio/flaky.wav') {
+        // 模拟下载中途断流：先发一小段再断开连接
+        res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': WAV.length + 100 });
+        res.write(WAV.subarray(0, 100));
+        setTimeout(() => res.destroy(), 20);
+        return;
       }
       sendJson(404, { error: 'not found' });
     });
@@ -319,10 +351,29 @@ test('网易云会员/受限歌自动换源咪咕下载', async () => {
   });
   assert.equal(status, 200);
   assert.equal(data.track.provider, 'migu');
-  assert.equal(data.track.name, '测试歌'); // 咪咕同名歌曲
+  assert.equal(data.track.name, '会员歌'); // 咪咕同名歌曲
   assert.ok(fs.existsSync(path.join(libraryTmpDir, 'online', 'migu-333.mp3')));
   assert.equal(stub.counts.miguListen, 1);
   assert.equal(stub.counts.miguDownload, 1);
+  await alice.close();
+});
+
+test('换源时歌名不匹配不添加错误歌曲', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitFor('room_created');
+  await alice.waitFor('state');
+
+  const { status, data } = await addOnline({
+    roomId: created.code,
+    trackId: 'netease:555',
+    name: '不匹配的歌',
+    artist: '某人',
+    nickname: '小A',
+  });
+  assert.equal(status, 502);
+  assert.match(data.error, /版权或会员限制/);
+  assert.ok(!fs.existsSync(path.join(libraryTmpDir, 'online', 'migu-444.mp3')));
   await alice.close();
 });
 
@@ -382,5 +433,29 @@ test('双源都不可播时返回 502 且不加入播放列表', async () => {
   assert.match(data.error, /版权或会员限制/);
   assert.ok(!fs.existsSync(path.join(libraryTmpDir, 'online', 'netease-999.mp3')));
   assert.ok(!fs.existsSync(path.join(libraryTmpDir, 'online', 'migu-999.mp3')));
+  await alice.close();
+});
+
+test('下载中途断流返回 502、清理半成品文件且服务不崩溃', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitFor('room_created');
+  await alice.waitFor('state');
+
+  const { status, data } = await addOnline({
+    roomId: created.code,
+    trackId: 'migu:777:c777:cr777',
+    name: '断流歌',
+    artist: '断流歌手',
+    nickname: '小A',
+  });
+  assert.equal(status, 502);
+  assert.ok(data.error);
+  assert.ok(!fs.existsSync(path.join(libraryTmpDir, 'online', 'migu-777.mp3')));
+  assert.ok(!fs.existsSync(path.join(libraryTmpDir, 'online', 'migu-777.mp3.tmp')));
+
+  // 服务必须还活着：断流失败不能把进程带崩
+  const res = await fetch(`http://127.0.0.1:${PORT}/api/online/search?q=存活检查`);
+  assert.equal(res.status, 200);
   await alice.close();
 });
