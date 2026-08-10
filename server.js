@@ -180,6 +180,9 @@ app.post('/api/upload', beginUpload, (req, res, next) => {
   const room = rooms.get(String(req.query.roomId || '').toUpperCase().trim());
   if (room) {
     room.activeUploads = (room.activeUploads || 0) + 1;
+    // 可能已有排定的销毁计时（空房间倒计时）：上传期间必须取消，等上传结束再重新计时
+    clearTimeout(roomTimers.get(room.code));
+    roomTimers.delete(room.code);
     res.on('finish', () => {
       room.activeUploads = Math.max(0, (room.activeUploads || 1) - 1);
       if (room.members.size === 0) scheduleRoomDestroy(room);
@@ -407,8 +410,8 @@ function scheduleRoomDestroy(room) {
     room.code,
     setTimeout(() => {
       roomTimers.delete(room.code);
-      // 有人已经重新进房就不销毁
-      if (room.members.size === 0) rooms.delete(room.code);
+      // 有人已经重新进房就不销毁；有上传进行中也不销毁，等上传结束再重新计时
+      if (room.members.size === 0 && room.activeUploads === 0) rooms.delete(room.code);
     }, ttl)
   );
 }

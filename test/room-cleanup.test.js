@@ -278,6 +278,29 @@ test('聊过天的房间断开后也不会被空房间计时销毁，而是等�
   await carol.close();
 });
 
+test('空房间已有销毁计时时，慢速上传不会被中途销毁房间', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitFor('room_created');
+  await alice.close(); // 房间变空，150ms 后销毁计时开始
+
+  // 销毁计时已排定后开始上传，上传总时长要超过销毁倒计时
+  const slow = await startSlowUpload(PORT, created.code);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  const res = await slow.finish();
+  assert.equal(res.status, 200);
+  const data = JSON.parse(res.body);
+  assert.equal(data.ok, true);
+  assert.equal(data.track.name, 'song.wav');
+
+  // 上传后房间仍然存在：新成员能加入并看到这首歌
+  const bob = await connectClient();
+  bob.send({ type: 'join_room', code: created.code, nickname: '小B' });
+  const state = await bob.waitFor('state');
+  assert.equal(state.playlist.length, 1);
+  await bob.close();
+});
+
 test('空房间有人正在上传歌曲时不会被清理', async () => {
   const alice = await connectClient();
   alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
