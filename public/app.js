@@ -686,7 +686,7 @@ async function searchOnline() {
     const data = await res.json();
     if (seq !== librarySeq) return; // 丢弃过期结果
     if (!res.ok) throw new Error(data.error || '搜索失败');
-    renderOnlineResults(data.results || [], data.total || 0);
+    renderOnlineResults(data.results || [], data.total || 0, data.vipEnabled === true);
   } catch {
     if (seq === librarySeq) {
       ui.libraryResults.innerHTML = '<div class="lib-note">在线曲库暂时不可用，请稍后再试</div>';
@@ -694,7 +694,7 @@ async function searchOnline() {
   }
 }
 
-function renderOnlineResults(results, total) {
+function renderOnlineResults(results, total, vipEnabled) {
   ui.libraryResults.innerHTML = '';
   if (total === 0) {
     const note = document.createElement('div');
@@ -718,7 +718,8 @@ function renderOnlineResults(results, total) {
     meta.textContent = [t.artist, t.durationMs ? fmt(t.durationMs) : ''].filter(Boolean).join(' · ');
     const add = document.createElement('button');
     add.className = 'small';
-    if (t.playable) {
+    // 会员歌：只有服务器配了有效会员 Cookie 才允许添加
+    if (t.playable || (vipEnabled && !t.playable)) {
       add.textContent = '+ 添加';
       add.addEventListener('click', () => addOnlineTrack(t, add));
     } else {

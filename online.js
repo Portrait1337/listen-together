@@ -7,6 +7,8 @@ const { pipeline } = require('stream/promises');
 
 const NETEASE_BASE = process.env.NETEASE_BASE || 'https://music.163.com';
 const MIGU_BASE = process.env.MIGU_BASE || 'https://app.pd.nf.migu.cn';
+const NETEASE_COOKIE_FILE =
+  process.env.NETEASE_COOKIE_FILE || path.join(__dirname, 'netease-cookie.txt');
 const DOWNLOAD_TIMEOUT_MS = Number(process.env.ONLINE_DOWNLOAD_TIMEOUT_MS) || 30000;
 const MAX_SIZE = Number(process.env.ONLINE_MAX_SIZE) || 50 * 1024 * 1024;
 const UA =
@@ -35,12 +37,12 @@ function isAllowedAudioHost(url) {
   );
 }
 
-async function httpJson(url, fetchImpl) {
+async function httpJson(url, fetchImpl, extraHeaders = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 15000);
   try {
     const res = await fetchImpl(url, {
-      headers: { 'User-Agent': UA, Accept: 'application/json' },
+      headers: { 'User-Agent': UA, Accept: 'application/json', ...extraHeaders },
       redirect: 'follow',
       signal: ctrl.signal,
     });
@@ -49,6 +51,53 @@ async function httpJson(url, fetchImpl) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+// ---------- 网易云会员 Cookie ----------
+let neteaseCookieCache = { value: undefined, at: 0 };
+
+// 优先取环境变量 NETEASE_COOKIE；否则读 netease-cookie.txt（30 秒缓存，改文件即生效）
+function getNeteaseCookie() {
+  if (process.env.NETEASE_COOKIE) return process.env.NETEASE_COOKIE.trim() || null;
+  const now = Date.now();
+  if (neteaseCookieCache.value !== undefined && now - neteaseCookieCache.at < 30000) {
+    return neteaseCookieCache.value;
+  }
+  let value = null;
+  try {
+    value = fs.readFileSync(NETEASE_COOKIE_FILE, 'utf8').trim() || null;
+  } catch {}
+  neteaseCookieCache = { value, at: now };
+  return value;
+}
+
+// 校验会员登录态：调账号接口，有 profile 才算有效
+async function checkNeteaseLogin(fetchImpl = fetch) {
+  const cookie = getNeteaseCookie();
+  if (!cookie) return { valid: false, nickname: '' };
+  try {
+    const data = await httpJson(`${NETEASE_BASE}/api/nuser/account/get`, fetchImpl, {
+      Cookie: cookie,
+      Referer: `${NETEASE_BASE}/`,
+    });
+    const profile = data && data.profile;
+    return { valid: !!profile, nickname: (profile && profile.nickname) || '' };
+  } catch {
+    return { valid: false, nickname: '' };
+  }
+}
+
+// 用会员 Cookie 取播放地址；拿不到返回 null
+async function resolveNeteaseVipUrl(id, fetchImpl = fetch) {
+  const cookie = getNeteaseCookie();
+  if (!cookie) return null;
+  const url = `${NETEASE_BASE}/api/song/enhance/player/url?id=${id}&ids=[${id}]&br=320000`;
+  const data = await httpJson(url, fetchImpl, {
+    Cookie: cookie,
+    Referer: `${NETEASE_BASE}/`,
+  });
+  const item = data && data.data && data.data[0];
+  return item && typeof item.url === 'string' && item.url ? item.url : null;
 }
 
 async function neteaseSearch(q, fetchImpl) {
@@ -205,7 +254,18 @@ async function resolveAndDownloadOnline(trackId, name, artist, destDir, { fetchI
       await downloadAudio(url, path.join(destDir, file), fetchImpl);
       return { file, provider: 'netease', name: name || `网易云歌曲 ${meta.neteaseId}` };
     } catch {
-      // 主源不可播（会员/版权/接口异常）：用歌名+歌手在咪咕换源
+      // 免费外链不可播：先试会员流式（有 Cookie 时），再咪咕换源
+      try {
+        const vipUrl = await resolveNeteaseVipUrl(meta.neteaseId, fetchImpl);
+        if (vipUrl) {
+          return {
+            streamUrl: vipUrl,
+            provider: 'netease',
+            name: name || `网易云歌曲 ${meta.neteaseId}`,
+            vip: true,
+          };
+        }
+      } catch {}
       const q = [artist, name].filter(Boolean).join(' ').trim();
       if (q) {
         try {
@@ -249,4 +309,6 @@ module.exports = {
   resolveAndDownloadOnline,
   parseTrackId,
   isAllowedAudioHost,
+  checkNeteaseLogin,
+  resolveNeteaseVipUrl,
 };

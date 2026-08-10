@@ -30,6 +30,7 @@ fs.mkdirSync(ONLINE_DIR, { recursive: true });
 const ONLINE_CACHE_TTL_MS = Number(process.env.ONLINE_CACHE_TTL_MS) || 60000;
 const ONLINE_RATE_WINDOW_MS = Number(process.env.ONLINE_RATE_WINDOW_MS) || 10000;
 const ONLINE_RATE_MAX = Number(process.env.ONLINE_RATE_MAX) || 10;
+const ONLINE_VIP_CACHE_TTL_MS = 10 * 60 * 1000; // 会员播放地址缓存 10 分钟（CDN 地址约 20 分钟有效）
 
 const app = express();
 // 只信任本机隧道（cpolar/cloudflared 都在本机跑）写入的 X-Forwarded-For：
@@ -117,6 +118,12 @@ function clientIp(req) {
 const onlineHits = new Map(); // ip -> [时间戳]
 const onlineCache = new Map(); // q -> { at, data }
 const onlineFiles = new Map(); // "provider:remoteId" -> 文件名
+const onlineVipCache = new Map(); // trackId -> { url, at }，会员播放地址短缓存
+let neteaseVip = { valid: false, nickname: '' }; // 会员登录状态，10 分钟刷新一次
+
+async function refreshNeteaseVip() {
+  neteaseVip = await online.checkNeteaseLogin();
+}
 
 function checkOnlineRate(ip) {
   const now = Date.now();
@@ -352,13 +359,16 @@ app.get('/api/online/search', async (req, res) => {
   }
   const q = String(req.query.q || '').trim().slice(0, 100);
   if (!q) return res.status(400).json({ error: '请输入搜索关键词' });
+  const vipExtra = { vipEnabled: neteaseVip.valid, vipNickname: neteaseVip.nickname };
   const cached = onlineCache.get(q);
-  if (cached && Date.now() - cached.at < ONLINE_CACHE_TTL_MS) return res.json(cached.data);
+  if (cached && Date.now() - cached.at < ONLINE_CACHE_TTL_MS) {
+    return res.json({ ...cached.data, ...vipExtra });
+  }
   try {
     const data = await online.searchOnline(q);
     onlineCache.set(q, { at: Date.now(), data });
     if (onlineCache.size > 200) onlineCache.delete(onlineCache.keys().next().value);
-    res.json(data);
+    res.json({ ...data, ...vipExtra });
   } catch {
     res.status(502).json({ error: '在线曲库暂时不可用，请稍后再试' });
   }
@@ -380,6 +390,7 @@ app.post('/api/online/add', async (req, res) => {
   let file = onlineFiles.get(cacheKey);
   let trackName = name;
   let provider = parsed.source;
+  let track;
   if (!file) {
     let done;
     try {
@@ -389,21 +400,47 @@ app.post('/api/online/add', async (req, res) => {
       return res.status(502).json({ error: '在线曲库暂时不可用，请稍后再试' });
     }
     if (done.error) return res.status(502).json({ error: done.error });
-    file = done.file;
     trackName = done.name || name;
     provider = done.provider;
-    onlineFiles.set(cacheKey, file);
+    if (done.streamUrl) {
+      // 会员歌：不落盘，播放时由 /api/online/stream 现取地址
+      track = {
+        id: crypto.randomBytes(6).toString('hex'),
+        name: trackName,
+        url: '/api/online/stream?trackId=' + encodeURIComponent(trackId),
+        size: 0,
+        uploader: String(req.body.nickname || '匿名').trim().slice(0, 20) || '匿名',
+        source: 'online',
+        provider,
+        vip: true,
+        remoteId: cacheKey,
+      };
+    } else {
+      file = done.file;
+      onlineFiles.set(cacheKey, file);
+      track = {
+        id: crypto.randomBytes(6).toString('hex'),
+        name: trackName,
+        url: '/library/online/' + encodeURIComponent(file),
+        size: fs.statSync(path.join(ONLINE_DIR, file)).size,
+        uploader: String(req.body.nickname || '匿名').trim().slice(0, 20) || '匿名',
+        source: 'online',
+        provider,
+        remoteId: cacheKey,
+      };
+    }
+  } else {
+    track = {
+      id: crypto.randomBytes(6).toString('hex'),
+      name: trackName,
+      url: '/library/online/' + encodeURIComponent(file),
+      size: fs.statSync(path.join(ONLINE_DIR, file)).size,
+      uploader: String(req.body.nickname || '匿名').trim().slice(0, 20) || '匿名',
+      source: 'online',
+      provider,
+      remoteId: cacheKey,
+    };
   }
-  const track = {
-    id: crypto.randomBytes(6).toString('hex'),
-    name: trackName,
-    url: '/library/online/' + encodeURIComponent(file),
-    size: fs.statSync(path.join(ONLINE_DIR, file)).size,
-    uploader: String(req.body.nickname || '匿名').trim().slice(0, 20) || '匿名',
-    source: 'online',
-    provider,
-    remoteId: cacheKey,
-  };
   room.playlist.push(track);
   if (room.currentIndex < 0) {
     room.currentIndex = 0;
@@ -412,6 +449,29 @@ app.post('/api/online/add', async (req, res) => {
   }
   broadcast(room, snapshot(room));
   res.json({ ok: true, track });
+});
+
+// 会员歌播放：服务器带 Cookie 现取 CDN 地址后 307 跳转（保留 Range，拖进度可用）
+app.get('/api/online/stream', async (req, res) => {
+  if (!checkOnlineRate(clientIp(req))) {
+    return res.status(429).end('请求太频繁，请稍后再试');
+  }
+  const trackId = String(req.query.trackId || '');
+  const parsed = online.parseTrackId(trackId);
+  if (!parsed || parsed.source !== 'netease') return res.status(400).end('无效的歌曲标识');
+  const cached = onlineVipCache.get(trackId);
+  let url = cached && Date.now() - cached.at < ONLINE_VIP_CACHE_TTL_MS ? cached.url : null;
+  if (!url) {
+    try {
+      url = await online.resolveNeteaseVipUrl(parsed.neteaseId);
+    } catch {
+      return res.status(502).end('在线曲库暂时不可用，请稍后再试');
+    }
+    if (!url) return res.status(403).end('会员登录已过期或歌曲不可播放');
+    onlineVipCache.set(trackId, { url, at: Date.now() });
+    if (onlineVipCache.size > 200) onlineVipCache.delete(onlineVipCache.keys().next().value);
+  }
+  res.redirect(307, url);
 });
 
 // multer 等上传错误统一返回
@@ -763,6 +823,9 @@ server.listen(PORT, () => {
   // 启动时异步建立曲库索引并清理一次孤儿上传文件
   refreshLibraryIndex();
   cleanupOrphanUploads();
+  // 会员登录状态：启动时校验一次，之后每 10 分钟刷新（Cookie 会过期）
+  refreshNeteaseVip();
+  setInterval(refreshNeteaseVip, 10 * 60 * 1000).unref();
 });
 
 // 曲库索引定期刷新；孤儿文件每天清理几次，防止磁盘被慢慢占满
