@@ -1026,6 +1026,8 @@ function updateRoomCodeInput() {
   const v = ui.roomCodeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (ui.roomCodeInput.value !== v) ui.roomCodeInput.value = v;
   updateCreateBtn();
+  // 房间码输满 6 位：高亮加入按钮，提醒用户可以加入
+  ui.joinBtn.classList.toggle('ready', v.length === 6);
 }
 ui.roomCodeInput.addEventListener('input', updateRoomCodeInput);
 
@@ -1126,9 +1128,11 @@ function leaveRoom() {
   ui.librarySearch.value = '';
   ui.libraryResults.classList.add('hidden');
   ui.libraryResults.innerHTML = '';
+  // 清空聊天记录，避免新建房间时残留上一个房间的消息
+  ui.chatList.innerHTML = '';
   ui.unlock.classList.add('hidden');
   ui.roomCodeInput.value = '';
-  updateCreateBtn();
+  updateRoomCodeInput();
   ui.landing.classList.remove('hidden');
   ui.room.classList.add('hidden');
   ui.hint.textContent = '';
@@ -1166,5 +1170,5 @@ ui.leaveBtn.addEventListener('click', leaveRoom);
     // 有房间记录但没有有效昵称：只预填房间号，等用户填写昵称后手动加入
     ui.roomCodeInput.value = savedRoom;
   }
-  updateCreateBtn();
+  updateRoomCodeInput();
 })();
