@@ -27,6 +27,15 @@
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/* 得意黑：房间号专用展示字体 */
+@font-face {
+  font-family: "Smiley Sans";
+  src: url("/fonts/SmileySans-Oblique.ttf.woff2") format("woff2");
+  font-weight: 400 800;
+  font-style: oblique;
+  font-display: swap;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -507,10 +516,10 @@ input[type="text"]:focus {
 }
 
 .room-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 26px;
-  font-weight: 800;
-  letter-spacing: 0.22em;
+  font-family: "Smiley Sans", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
   color: var(--amber-strong);
   text-shadow: 0 0 22px rgba(245, 166, 35, 0.32);
 }
