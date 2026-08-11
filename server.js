@@ -6,6 +6,7 @@ const express = require('express');
 const multer = require('multer');
 const { WebSocketServer, WebSocket } = require('ws');
 const online = require('./online');
+const cos = require('./cos');
 
 const PORT = process.env.PORT || 3000;
 const MAX_UPLOAD = 200 * 1024 * 1024; // 200MB
@@ -319,12 +320,33 @@ app.post('/api/upload', beginUpload, (req, res, next) => {
     if (req.file && req.file.path) fs.unlink(req.file.path, () => {});
     return res.status(404).json({ error: '房间不存在，请重新加入' });
   }
+  // 内容上云：本地临时落盘后转存 COS，播放地址指向云端，手机出口带宽只消耗一次
+  const ext = (path.extname(req.file.originalname || '') || '.mp3').toLowerCase();
+  const key = 'uploads/' + crypto.randomBytes(12).toString('hex') + ext;
+  const contentType = req.file.mimetype || 'audio/mpeg';
+  let url;
+  if (cos.enabled()) {
+    try {
+      url = await cos.uploadFile(req.file.path, key, contentType);
+    } catch (err) {
+      // COS 转存失败：删本地临时文件，返回错误，不污染歌单
+      fs.unlink(req.file.path, () => {});
+      console.error('COS 上传失败：', err.message);
+      return res.status(500).json({ error: '上传失败，请重试' });
+    }
+    // 转存成功：删除手机本地中转文件
+    fs.unlink(req.file.path, () => {});
+  } else {
+    // 未配置 COS：保持原行为，文件留在本地 /uploads
+    url = '/uploads/' + req.file.filename;
+  }
   const track = {
     id: crypto.randomBytes(6).toString('hex'),
     name: req.file.originalname,
-    url: '/uploads/' + req.file.filename,
+    url,
     size: req.file.size,
     uploader: String(req.body.nickname || '匿名').trim().slice(0, 20) || '匿名',
+    cosKey: cos.enabled() ? key : null,
   };
   room.playlist.push(track);
   ensureFirstTrack(room);

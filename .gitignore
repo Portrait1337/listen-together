@@ -3,5 +3,6 @@ uploads/
 library/
 online-cache/
 netease-cookie.txt
+cos-config.json
 .DS_Store
 npm-debug.log*
