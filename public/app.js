@@ -63,7 +63,7 @@ let autoJoinTimer = null;
 let libraryTimer = null;
 let librarySeq = 0;
 let libraryComposing = false;
-let searchTab = 'local'; // 搜索来源：local=本地曲库 online=在线音乐
+let searchTab = 'online'; // 搜索来源：local=本地曲库 online=在线音乐（进房默认在线）
 let onlineOffset = 0; // 在线搜索已加载条数
 let onlineHasMore = false;
 let onlineSource = 'netease'; // 在线搜索当前平台：netease / migu
@@ -1122,7 +1122,7 @@ function leaveRoom() {
   enteredRoom = false;
   roomCode = null;
   creatingRoom = false;
-  setSearchTab('local');
+  setSearchTab('online');
   ui.librarySearch.value = '';
   ui.libraryResults.classList.add('hidden');
   ui.libraryResults.innerHTML = '';
