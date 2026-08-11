@@ -32,6 +32,7 @@ function client(url) {
   });
   return {
     ws,
+    inbox,
     sent: (o) => ws.send(JSON.stringify(o)),
     wait: (pred, timeout = 6000) => {
       const idx = inbox.findIndex(pred);
@@ -76,6 +77,7 @@ async function main() {
         LIBRARY_DIR: LIB,
         NETEASE_COOKIE_FILE: path.join(__dirname, '..', 'netease-cookie.txt'),
         WS_HEARTBEAT_MS: '400',
+        MEMBER_GRACE_MS: '500',
       },
       stdio: 'ignore',
     });
@@ -124,21 +126,76 @@ async function main() {
     console.log('PASS：同一昵称只出现一次');
   }
 
-  // 场景二（仅本地测试，生产心跳间隔 30 秒）：B 变成"死连接"
+  // 场景二（仅本地测试，生产心跳间隔 30 秒）：D（昵称 小红）变成"死连接"
   // （暂停 TCP 读取，不再应答服务端 ping，模拟微信切后台/网络切换残留），
-  // 心跳应把它清掉，成员列表回到 1 人
+  // 心跳应把它清掉并广播 member_left
   if (!process.env.WS_URL) {
-    b.ws._socket.pause();
-    const leftMsg = await a.wait((m) => m.type === 'member_left', 8000);
+    console.log('场景二开始：模拟死连接');
+    const d = client(url);
+    await open(d);
+    d.sent({ type: 'join_room', code, nickname: '小红' });
+    await d.wait((m) => m.type === 'members');
+    d.ws._socket.pause();
+    const leftMsg = await a.wait((m) => m.type === 'member_left' && m.members.every((x) => x.nickname !== '小红'), 8000);
     const leftNames = leftMsg.members.map((x) => x.nickname);
-    const after = leftNames.filter((n) => n === '小明').length;
-    console.log('死连接清理后小明出现次数：', after, JSON.stringify(leftNames));
-    if (after !== 1) {
+    console.log('死连接清理后成员列表：', JSON.stringify(leftNames));
+    if (leftNames.some((n) => n === '小红')) {
       console.error('FAIL：死连接未被心跳清理');
       process.exitCode = 1;
     } else {
       console.log('PASS：死连接被心跳清理');
     }
+  }
+
+  // 场景三（仅本地）：断开后 500ms 宽限期内同昵称重连，
+  // 其他人不应看到 member_left/member_joined 闪烁
+  if (!process.env.WS_URL) {
+    console.log('场景三开始：宽限期重连');
+    const o = client(url);
+    await open(o);
+    o.sent({ type: 'join_room', code, nickname: '观察员' });
+    await o.wait((m) => m.type === 'members');
+    o.inbox.length = 0; // 清空基线消息，只统计后续的离开/加入闪烁
+
+    a.ws.close(); // 模拟断线（不主动 leave）
+    const c = client(url);
+    await open(c);
+    c.sent({ type: 'join_room', code, nickname: '小明' });
+    await c.wait((m) => m.type === 'members');
+
+    await new Promise((r) => setTimeout(r, 1200)); // 超过 500ms 宽限期
+    const flash = o.inbox.filter((m) => m.type === 'member_left' || m.type === 'member_joined');
+    if (flash.length > 0) {
+      console.error('FAIL：宽限期重连仍出现离开/加入闪烁:', JSON.stringify(flash));
+      process.exitCode = 1;
+    } else {
+      console.log('PASS：宽限期内重连无闪烁');
+    }
+    o.ws.close();
+  }
+
+  // 场景四：主动发送 leave 消息后应立即广播 member_left（不走宽限期）
+  {
+    console.log('场景四开始：主动 leave');
+    const obs = client(url);
+    await open(obs);
+    obs.sent({ type: 'join_room', code, nickname: '观察员2' });
+    await obs.wait((m) => m.type === 'members');
+    const act = client(url);
+    await open(act);
+    act.sent({ type: 'join_room', code, nickname: '小红' });
+    await act.wait((m) => m.type === 'members');
+    act.sent({ type: 'leave' });
+    act.ws.close();
+    const leftMsg = await obs.wait((m) => m.type === 'member_left', 3000);
+    const ok = (leftMsg.members || []).every((x) => x.nickname !== '小红');
+    if (!ok) {
+      console.error('FAIL：leave 后小红仍在成员列表');
+      process.exitCode = 1;
+    } else {
+      console.log('PASS：主动 leave 立即广播离开');
+    }
+    obs.ws.close();
   }
 
   a.ws.close();

@@ -228,9 +228,22 @@ function targetPosition() {
   return state.playing ? state.positionMs + (serverNow - state.updatedAt) : state.positionMs;
 }
 
+function currentTrack() {
+  return state && Array.isArray(state.playlist) ? state.playlist[state.currentIndex] || null : null;
+}
+
+// 权威时长：FLAC 在 iOS/微信流式播放下 audio.duration 可能返回 Infinity/错误值，
+// 有服务器解析的 durationMs 时优先用它；否则退回浏览器时长
+function currentDurMs() {
+  const t = currentTrack();
+  if (t && Number.isFinite(t.durationMs) && t.durationMs > 0) return t.durationMs;
+  const d = audio.duration;
+  return Number.isFinite(d) && d > 0 ? d * 1000 : 0;
+}
+
 function alignTo(targetMs, force) {
   if (!Number.isFinite(targetMs) || targetMs < 0) return;
-  const durMs = (audio.duration || 0) * 1000;
+  const durMs = currentDurMs();
   if (durMs > 0) {
     // 不允许跳到结尾之后；接近结尾时最多到结尾前 2 秒，避免一跳就触发“播完”
     targetMs = Math.min(targetMs, Math.max(0, durMs - 2000));
@@ -352,7 +365,8 @@ audio.addEventListener('seeked', () => {
 });
 
 audio.addEventListener('timeupdate', () => {
-  if (audio.duration) ui.seek.max = Math.floor(audio.duration * 1000);
+  const durMs = currentDurMs();
+  if (durMs > 0) ui.seek.max = Math.floor(durMs);
   if (!dragging) ui.seek.value = audio.currentTime * 1000;
   renderTime();
   // 对齐观察期：持续核对进度，偏差大就再跳，到位就结束
@@ -374,7 +388,7 @@ audio.addEventListener('ended', () => {
   // 跳转/对齐刚结束（1.5 秒内）触发的假“播完”不上报
   if (Date.now() - lastSeekAt < 1500) return;
   // 只有确实播到结尾附近才算自然播完
-  const dur = audio.duration;
+  const dur = currentDurMs() / 1000;
   if (!(dur > 0) || Math.abs(audio.currentTime - dur) > 0.5) return;
   const track = state.playlist[state.currentIndex];
   send({ type: 'control', action: 'ended', trackId: track ? track.id : '' });
@@ -574,12 +588,10 @@ function renderTime() {
   if (needAlign && state) {
     cur = state.playing ? targetPosition() : state.positionMs;
   }
-  const dur = (audio.duration || 0) * 1000;
+  const dur = currentDurMs();
   ui.timeLabel.textContent = fmt(cur) + ' / ' + fmt(dur);
   if (!dragging) {
-    ui.seek.value = audio.duration
-      ? Math.min(Math.round(cur), Math.floor(audio.duration * 1000))
-      : Math.round(cur);
+    ui.seek.value = dur > 0 ? Math.min(Math.round(cur), Math.floor(dur)) : Math.round(cur);
   }
   const pct = ui.seek.max > 0 ? Math.min(100, (cur / ui.seek.max) * 100) : 0;
   ui.seek.style.setProperty('--seek-pct', pct + '%');
@@ -1131,6 +1143,8 @@ function leaveRoom() {
   clearTimeout(autoJoinTimer);
   clearTimeout(reconnectTimer);
   try {
+    // 主动退出：告诉服务器立即移除自己，不走 15 秒宽限期
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'leave' }));
     if (ws) ws.close();
   } catch {}
   ws = null;

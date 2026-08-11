@@ -7,6 +7,7 @@ const multer = require('multer');
 const { WebSocketServer, WebSocket } = require('ws');
 const online = require('./online');
 const cos = require('./cos');
+const { parseFlacDurationMs } = require('./flac');
 
 const PORT = process.env.PORT || 3000;
 const MAX_UPLOAD = 200 * 1024 * 1024; // 200MB
@@ -325,6 +326,8 @@ app.post('/api/upload', beginUpload, (req, res, next) => {
     fs.unlink(req.file.path, () => {});
     return res.status(400).json({ error: '文件内容不是有效的音频' });
   }
+  // FLAC：iOS/微信流式播放的 duration 解析不可靠，上传时解析 STREAMINFO 存权威时长
+  const durationMs = await parseFlacDurationMs(req.file.path);
   const room = rooms.get(
     String((req.body && req.body.roomId) || req.query.roomId || '').toUpperCase().trim()
   );
@@ -360,6 +363,7 @@ app.post('/api/upload', beginUpload, (req, res, next) => {
     size: req.file.size,
     uploader: String(req.body.nickname || '匿名').trim().slice(0, 20) || '匿名',
     cosKey: cos.enabled() ? key : null,
+    durationMs: durationMs || undefined,
   };
   room.playlist.push(track);
   ensureFirstTrack(room);
@@ -711,6 +715,13 @@ function createRoom(name, ws, nickname) {
 }
 
 function addMember(room, ws, nickname) {
+  // 宽限期内同昵称重连：顶掉旧死连接，不广播 member_left/member_joined
+  for (const [oldWs, m] of Array.from(room.members)) {
+    if (oldWs !== ws && m.nickname === nickname && oldWs.dead) {
+      clearTimeout(oldWs.graceTimer);
+      room.members.delete(oldWs);
+    }
+  }
   room.members.set(ws, { nickname });
   clearTimeout(roomTimers.get(room.code));
 }
@@ -852,11 +863,14 @@ const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
 // 防止微信切后台/网络切换留下的半开连接长期占位，导致同一用户重复出现在成员列表、
 // 以及死连接白白占用广播资源和连接数上限；2 轮容错避免锁屏/切后台的短暂冻结被误杀。
 const WS_HEARTBEAT_MS = Number(process.env.WS_HEARTBEAT_MS) || 30000;
+// 连续 N 轮无 pong（默认 10 轮 ≈ 5 分钟）才判定死连接：
+// 避免 iPhone 锁屏/切后台听歌时被误踢（90 秒太激进）
+const WS_HEARTBEAT_MAX_MISSED = Number(process.env.WS_HEARTBEAT_MAX_MISSED) || 10;
 setInterval(() => {
   for (const client of wss.clients) {
     if (client.isAlive === false) {
       client.heartbeatMissed = (client.heartbeatMissed || 0) + 1;
-      if (client.heartbeatMissed >= 2) {
+      if (client.heartbeatMissed >= WS_HEARTBEAT_MAX_MISSED) {
         client.terminate();
         continue;
       }
@@ -871,6 +885,10 @@ setInterval(() => {
     }
   }
 }, WS_HEARTBEAT_MS).unref();
+
+// 断开宽限：连接断开后不立即从成员列表移除，给同昵称重连留窗口，
+// 避免 iPhone 锁屏/切后台再回来时其他人看到"离开又进来"的闪烁
+const MEMBER_GRACE_MS = Number(process.env.MEMBER_GRACE_MS) || 15000;
 
 wss.on('connection', (ws) => {
   ws.isAlive = true;
@@ -929,11 +947,17 @@ wss.on('connection', (ws) => {
         }
         nickname = cleanNick(msg.nickname);
         room = target;
+        // 同昵称已在房间（重连/多端）：成员列表无变化，不广播 member_joined，避免"离开又进来"闪烁
+        const isNewNick = !Array.from(room.members.values()).some((m) => m.nickname === nickname);
         addMember(room, ws, nickname);
         send({ type: 'chat_history', messages: room.chatHistory });
         send(snapshot(room));
         send({ type: 'members', members: membersList(room) });
-        broadcast(room, { type: 'member_joined', nickname, members: membersList(room) });
+        if (isNewNick) {
+          broadcast(room, { type: 'member_joined', nickname, members: membersList(room) });
+        } else {
+          broadcast(room, { type: 'members', members: membersList(room) });
+        }
         break;
       }
 
@@ -986,6 +1010,19 @@ wss.on('connection', (ws) => {
         }
         break;
 
+      case 'leave':
+        // 主动退出：立即移除并广播，不走宽限期
+        if (!room) return;
+        clearTimeout(ws.graceTimer);
+        room.members.delete(ws);
+        if (room.members.size === 0) {
+          scheduleRoomDestroy(room);
+        } else {
+          broadcast(room, { type: 'member_left', nickname, members: membersList(room) });
+        }
+        room = null;
+        break;
+
       case 'ping':
         send({ type: 'pong', t1: msg.t1, serverTime: Date.now() });
         break;
@@ -999,12 +1036,25 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    if (room) {
-      removeMember(room, ws);
-      if (room.members.size > 0) {
-        broadcast(room, { type: 'member_left', nickname, members: membersList(room) });
-      }
+    if (!room) return;
+    // 竞态防护：同昵称的新连接已先加入（close 事件晚到），直接静默移除旧连接
+    const hasDup = Array.from(room.members).some(([other, m]) => other !== ws && m.nickname === nickname);
+    if (hasDup) {
+      room.members.delete(ws);
+      return;
     }
+    ws.dead = true;
+    // 进入宽限期：同昵称重连会顶掉本连接；超时未重连才移除并广播离开
+    ws.graceTimer = setTimeout(() => {
+      if (room.members.has(ws)) {
+        room.members.delete(ws);
+        if (room.members.size === 0) {
+          scheduleRoomDestroy(room);
+        } else {
+          broadcast(room, { type: 'member_left', nickname, members: membersList(room) });
+        }
+      }
+    }, MEMBER_GRACE_MS);
   });
 
   ws.on('error', () => {});
