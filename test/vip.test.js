@@ -115,6 +115,7 @@ function startServer(port, libDir, extraEnv = {}) {
         PORT: String(port),
         UPLOAD_DIR: path.join(tmpBase, `upload-${port}`),
         LIBRARY_DIR: libDir,
+        ONLINE_DIR: path.join(tmpBase, `online-${port}`),
         EMPTY_ROOM_TTL_MS: '3000',
         ACTIVE_ROOM_TTL_MS: '3000',
         NETEASE_BASE: `http://127.0.0.1:${stub.port}`,
@@ -277,7 +278,7 @@ test('会员歌添加为流式条目：不落盘、URL 指向流式接口', asyn
   assert.equal(data.track.provider, 'netease');
   assert.equal(data.track.vip, true);
   assert.equal(data.track.url, '/api/online/stream?trackId=netease%3A222');
-  assert.ok(!fs.existsSync(path.join(tmpBase, 'lib-vip', 'online', 'netease-222.mp3')));
+  assert.ok(!fs.existsSync(path.join(tmpBase, `online-${VIP_PORT}`, 'netease-222.mp3')));
   await room.client.close();
 });
 
@@ -315,6 +316,6 @@ test('有效 Cookie 不影响免费歌下载落盘', async () => {
   const room = await createRoom(VIP_PORT);
   const { status } = await addOnline(VIP_PORT, room.code, 'netease:111', '免费歌', '歌手A');
   assert.equal(status, 200);
-  assert.ok(fs.existsSync(path.join(tmpBase, 'lib-vip', 'online', 'netease-111.mp3')));
+  assert.ok(fs.existsSync(path.join(tmpBase, `online-${VIP_PORT}`, 'netease-111.mp3')));
   await room.client.close();
 });

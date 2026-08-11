@@ -25,8 +25,32 @@ const UPLOAD_DIR = process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR)
 const LIBRARY_DIR = process.env.LIBRARY_DIR ? path.resolve(process.env.LIBRARY_DIR) : path.join(__dirname, 'library');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 fs.mkdirSync(LIBRARY_DIR, { recursive: true });
-const ONLINE_DIR = path.join(LIBRARY_DIR, 'online');
+// 在线音乐缓存独立存放，不放在 library 里：曲库搜索只扫 library，
+// 缓存文件不会被用户当成本地曲库歌曲搜到
+const ONLINE_DIR = process.env.ONLINE_DIR ? path.resolve(process.env.ONLINE_DIR) : path.join(__dirname, 'online-cache');
 fs.mkdirSync(ONLINE_DIR, { recursive: true });
+
+// 迁移旧版本缓存在 library/online 里的文件到独立目录
+function migrateOldOnlineCache() {
+  const oldDir = path.join(LIBRARY_DIR, 'online');
+  let entries;
+  try {
+    entries = fs.readdirSync(oldDir);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    const src = path.join(oldDir, name);
+    const dst = path.join(ONLINE_DIR, name);
+    try {
+      if (fs.statSync(src).isFile() && !fs.existsSync(dst)) fs.renameSync(src, dst);
+    } catch {}
+  }
+  try {
+    fs.rmdirSync(oldDir);
+  } catch {}
+}
+migrateOldOnlineCache();
 const ONLINE_CACHE_TTL_MS = Number(process.env.ONLINE_CACHE_TTL_MS) || 60000;
 const ONLINE_RATE_WINDOW_MS = Number(process.env.ONLINE_RATE_WINDOW_MS) || 10000;
 const ONLINE_RATE_MAX = Number(process.env.ONLINE_RATE_MAX) || 10;
@@ -208,13 +232,13 @@ function ensureFirstTrack(room) {
 }
 
 // 清理无人引用的在线下载文件：在线歌曲是缓存性质（随时可重新下载），
-// 长时间没人引用就删掉，防止 library/online 无限增长占满磁盘。
+// 长时间没人引用就删掉，防止 online-cache 无限增长占满磁盘。
 // 与上传文件不同：上传是用户数据，在线下载是派生缓存，清理可以更积极。
 function cleanupOrphanOnlineFiles() {
   const referenced = new Set();
   for (const room of rooms.values()) {
     for (const t of room.playlist) {
-      if (typeof t.url === 'string' && t.url.startsWith('/library/online/')) {
+      if (typeof t.url === 'string' && t.url.startsWith('/online-cache/')) {
         referenced.add(decodeURIComponent(path.basename(t.url)));
       }
     }
@@ -251,6 +275,12 @@ app.use(
 app.use(
   '/library',
   express.static(LIBRARY_DIR, {
+    setHeaders: (res) => res.setHeader('X-Content-Type-Options', 'nosniff'),
+  })
+);
+app.use(
+  '/online-cache',
+  express.static(ONLINE_DIR, {
     setHeaders: (res) => res.setHeader('X-Content-Type-Options', 'nosniff'),
   })
 );
@@ -457,7 +487,7 @@ app.post('/api/online/add', async (req, res) => {
   const cacheKey =
     parsed.source + ':' + (parsed.source === 'netease' ? parsed.neteaseId : parsed.audioId);
   let file = onlineFiles.get(cacheKey);
-  // 缓存指向的文件可能已被外部删除（用户清理 library/online 等）：先验证存在性，
+  // 缓存指向的文件可能已被外部删除（用户清理 online-cache 等）：先验证存在性，
   // 不存在就当作没有缓存重新下载，避免后面 statSync 抛 ENOENT 把整个进程带崩
   if (file && !fs.existsSync(path.join(ONLINE_DIR, file))) {
     onlineFiles.delete(cacheKey);
@@ -513,7 +543,7 @@ app.post('/api/online/add', async (req, res) => {
       track = {
         id: crypto.randomBytes(6).toString('hex'),
         name: trackName,
-        url: '/library/online/' + encodeURIComponent(file),
+        url: '/online-cache/' + encodeURIComponent(file),
         size,
         uploader: String(req.body.nickname || '匿名').trim().slice(0, 20) || '匿名',
         source: 'online',
@@ -533,7 +563,7 @@ app.post('/api/online/add', async (req, res) => {
     track = {
       id: crypto.randomBytes(6).toString('hex'),
       name: trackName,
-      url: '/library/online/' + encodeURIComponent(file),
+      url: '/online-cache/' + encodeURIComponent(file),
       size,
       uploader: String(req.body.nickname || '匿名').trim().slice(0, 20) || '匿名',
       source: 'online',

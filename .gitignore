@@ -1,6 +1,7 @@
 node_modules/
 uploads/
 library/
+online-cache/
 netease-cookie.txt
 .DS_Store
 npm-debug.log*

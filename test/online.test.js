@@ -12,6 +12,7 @@ const SERVER_PATH = path.join(__dirname, '..', 'server.js');
 const PORT = 20000 + crypto.randomInt(0, 30000);
 const uploadTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lt-online-upload-'));
 const libraryTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lt-online-lib-'));
+const onlineTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lt-online-cache-'));
 // 有效 wav 头 + 4KB 静音数据，保证超过下载模块的最小体积校验
 const WAV = Buffer.concat([
   Buffer.from('UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA', 'base64'),
@@ -243,6 +244,7 @@ function startServer(extraEnv = {}, port = PORT) {
         PORT: String(port),
         UPLOAD_DIR: uploadTmpDir,
         LIBRARY_DIR: libraryTmpDir,
+        ONLINE_DIR: onlineTmpDir,
         EMPTY_ROOM_TTL_MS: '3000',
         ACTIVE_ROOM_TTL_MS: '3000',
         NETEASE_BASE: `http://127.0.0.1:${stub.port}`,
@@ -357,6 +359,7 @@ after(() => {
   if (stub) stub.server.close();
   fs.rmSync(uploadTmpDir, { recursive: true, force: true });
   fs.rmSync(libraryTmpDir, { recursive: true, force: true });
+  fs.rmSync(onlineTmpDir, { recursive: true, force: true });
 });
 
 test('在线搜索合并网易云与咪咕结果，会员歌标记不可播', async () => {
@@ -449,7 +452,7 @@ test('在线请求超过限速返回 429', async () => {
   rateServerProcess = null;
 });
 
-test('添加网易云免费歌：下载到 library/online 并广播播放列表', async () => {
+test('添加网易云免费歌：下载到独立缓存目录并广播播放列表', async () => {
   const alice = await connectClient();
   alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
   const created = await alice.waitFor('room_created');
@@ -466,7 +469,12 @@ test('添加网易云免费歌：下载到 library/online 并广播播放列表'
   assert.equal(data.ok, true);
   assert.equal(data.track.source, 'online');
   assert.equal(data.track.provider, 'netease');
-  assert.ok(fs.existsSync(path.join(libraryTmpDir, 'online', 'netease-111.mp3')));
+  assert.ok(fs.existsSync(path.join(onlineTmpDir, 'netease-111.mp3')));
+
+  // 缓存文件不在曲库目录里，曲库搜索不能搜到它
+  const libRes = await fetch(`http://127.0.0.1:${PORT}/api/library/search?q=测试歌`);
+  const libData = await libRes.json();
+  assert.equal(libData.total, 0);
 
   const state = await alice.waitFor('state');
   assert.equal(state.playlist.length, 1);
@@ -490,7 +498,7 @@ test('网易云会员/受限歌自动换源咪咕下载', async () => {
   assert.equal(status, 200);
   assert.equal(data.track.provider, 'migu');
   assert.equal(data.track.name, '会员歌'); // 咪咕同名歌曲
-  assert.ok(fs.existsSync(path.join(libraryTmpDir, 'online', 'migu-333.mp3')));
+  assert.ok(fs.existsSync(path.join(onlineTmpDir, 'migu-333.mp3')));
   assert.equal(stub.counts.miguListen, 1);
   assert.equal(stub.counts.miguDownload, 1);
   await alice.close();
@@ -511,7 +519,7 @@ test('换源时歌名不匹配不添加错误歌曲', async () => {
   });
   assert.equal(status, 502);
   assert.match(data.error, /版权或会员限制/);
-  assert.ok(!fs.existsSync(path.join(libraryTmpDir, 'online', 'migu-444.mp3')));
+  assert.ok(!fs.existsSync(path.join(onlineTmpDir, 'migu-444.mp3')));
   await alice.close();
 });
 
@@ -569,8 +577,8 @@ test('双源都不可播时返回 502 且不加入播放列表', async () => {
   });
   assert.equal(status, 502);
   assert.match(data.error, /版权或会员限制/);
-  assert.ok(!fs.existsSync(path.join(libraryTmpDir, 'online', 'netease-999.mp3')));
-  assert.ok(!fs.existsSync(path.join(libraryTmpDir, 'online', 'migu-999.mp3')));
+  assert.ok(!fs.existsSync(path.join(onlineTmpDir, 'netease-999.mp3')));
+  assert.ok(!fs.existsSync(path.join(onlineTmpDir, 'migu-999.mp3')));
   await alice.close();
 });
 
@@ -589,8 +597,8 @@ test('下载中途断流返回 502、清理半成品文件且服务不崩溃', a
   });
   assert.equal(status, 502);
   assert.ok(data.error);
-  assert.ok(!fs.existsSync(path.join(libraryTmpDir, 'online', 'migu-777.mp3')));
-  assert.ok(!fs.existsSync(path.join(libraryTmpDir, 'online', 'migu-777.mp3.tmp')));
+  assert.ok(!fs.existsSync(path.join(onlineTmpDir, 'migu-777.mp3')));
+  assert.ok(!fs.existsSync(path.join(onlineTmpDir, 'migu-777.mp3.tmp')));
 
   // 服务必须还活着：断流失败不能把进程带崩
   const res = await fetch(`http://127.0.0.1:${PORT}/api/online/search?q=存活检查`);
@@ -614,8 +622,8 @@ test('在线歌曲文件被外部删除后再次添加：自动重新下载且�
   });
   assert.equal(r1.status, 200);
 
-  // 模拟外部删除下载文件（用户清理 library/online）
-  const file = path.join(libraryTmpDir, 'online', 'netease-111.mp3');
+  // 模拟外部删除下载文件（用户清理 online-cache）
+  const file = path.join(onlineTmpDir, 'netease-111.mp3');
   assert.ok(fs.existsSync(file), '下载文件应存在');
   fs.unlinkSync(file);
 
@@ -690,7 +698,7 @@ test('无人引用的在线下载文件被定期清理，有引用的保留', as
 
     const r1 = await addOnline({ roomId: created.code, trackId: 'migu:500:c500:cr500', name: '缓存歌', artist: '歌手', nickname: '小A' }, clPort);
     assert.equal(r1.status, 200);
-    const file = path.join(libraryTmpDir, 'online', 'migu-500.mp3');
+    const file = path.join(onlineTmpDir, 'migu-500.mp3');
     assert.ok(fs.existsSync(file), '下载文件应存在');
 
     // 房间还引用着：过了多个清理周期文件必须保留
