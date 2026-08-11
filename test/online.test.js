@@ -41,6 +41,10 @@ function startStub() {
       };
       if (u.pathname === '/api/search/get/web') {
         counts.neteaseSearch += 1;
+        if ((u.searchParams.get('s') || '').includes('慢搜索')) {
+          // 慢速搜索（延迟 300ms），用于并发搜索上限测试
+          return setTimeout(() => sendJson(200, { result: { songs: [] } }), 300);
+        }
         if ((u.searchParams.get('s') || '').includes('多结果')) {
           return sendJson(200, {
             result: {
@@ -699,5 +703,33 @@ test('无人引用的在线下载文件被定期清理，有引用的保留', as
     assert.ok(!fs.existsSync(file), '无引用且超 TTL 后应被清理');
   } finally {
     clServer.kill();
+  }
+});
+
+test('并发搜索超过上限返回 429，完成后槽位释放', async () => {
+  const spPort = 20000 + crypto.randomInt(0, 30000);
+  const spServer = await startServer(
+    {
+      ONLINE_MAX_CONCURRENT_SEARCHES: '1',
+      ONLINE_RATE_WINDOW_MS: '60000',
+      ONLINE_RATE_MAX: '1000',
+    },
+    spPort
+  );
+  try {
+    // 两个慢速搜索（300ms）同时发起：并发上限 1，必然一个 200 一个 429
+    // （q 不同避免缓存共享；source=netease 只打网易云接口，时序可控）
+    const [r1, r2] = await Promise.all([
+      fetch(`http://127.0.0.1:${spPort}/api/online/search?q=慢搜索1&source=netease`),
+      fetch(`http://127.0.0.1:${spPort}/api/online/search?q=慢搜索2&source=netease`),
+    ]);
+    const statuses = [r1.status, r2.status].sort();
+    assert.deepEqual(statuses, [200, 429], '并发搜索应一个成功一个被限，实际: ' + statuses.join(','));
+
+    // 第一个搜索完成后槽位释放：新词搜索应成功
+    const r3 = await fetch(`http://127.0.0.1:${spPort}/api/online/search?q=慢搜索3&source=netease`);
+    assert.equal(r3.status, 200);
+  } finally {
+    spServer.kill();
   }
 });

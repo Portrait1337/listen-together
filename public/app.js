@@ -81,16 +81,28 @@ function saveNickname(nick) {
 }
 
 function connect() {
+  // 防止重复点击/重连叠出多个 WebSocket：先关掉旧连接并摘除事件处理器，
+  // 否则多个"自己"同时在线会造成成员列表重复、双份广播
+  if (ws) {
+    try {
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.close();
+    } catch {}
+    ws = null;
+  }
   const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
   ws = new WebSocket(proto + location.host + '/ws');
-  ws.onopen = async () => {
-    await estimateOffset();
+  ws.onopen = () => {
+    // 先发建房/进房，再异步校准时钟：校准只用于播放进度对齐，
+    // 不应阻塞房间创建（微信等环境下首次 ping 往返可能很慢甚至丢失）
     if (creatingRoom) {
       creatingRoom = false;
       send({ type: 'create_room', name: '一起听', nickname });
     } else if (roomCode) {
       send({ type: 'join_room', code: roomCode, nickname });
     }
+    estimateOffset();
   };
   ws.onmessage = (ev) => {
     let d;
@@ -116,7 +128,17 @@ function connect() {
 // 通过 ping/pong 估算服务器时间与本地时间的差值，用于进度对齐
 function estimateOffset() {
   return new Promise((resolve) => {
+    const sock = ws;
+    if (!sock) return resolve();
     const t1 = Date.now();
+    let done = false;
+    const finish = (o) => {
+      if (done) return;
+      done = true;
+      sock.removeEventListener('message', onMsg);
+      offset = o;
+      resolve();
+    };
     const onMsg = (ev) => {
       let d;
       try {
@@ -124,15 +146,12 @@ function estimateOffset() {
       } catch {
         return;
       }
-      if (d.type === 'pong' && d.t1 === t1) {
-        ws.removeEventListener('message', onMsg);
-        offset = d.serverTime - (t1 + Date.now()) / 2;
-        resolve();
-      }
+      if (d.type === 'pong' && d.t1 === t1) finish(d.serverTime - (t1 + Date.now()) / 2);
     };
-    ws.addEventListener('message', onMsg);
-    send({ type: 'ping', t1 });
-    setTimeout(resolve, 1200);
+    sock.addEventListener('message', onMsg);
+    if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ type: 'ping', t1 }));
+    // 兜底：1.2 秒没收到 pong 就不等了（建房/进房已不依赖本次校准）
+    setTimeout(() => finish(0), 1200);
   });
 }
 
@@ -945,6 +964,7 @@ function enterRoom() {
 }
 
 ui.createBtn.addEventListener('click', () => {
+  if (creatingRoom) return; // 正在创建中，忽略重复点击（防微信下连点叠出多个连接）
   const nick = ui.nickname.value.trim();
   if (!nick) {
     ui.hint.textContent = '请先填写昵称';
@@ -958,6 +978,8 @@ ui.createBtn.addEventListener('click', () => {
   leftRoom = false;
   clearTimeout(autoJoinTimer);
   unlockAudio();
+  ui.createBtn.disabled = true;
+  ui.hint.textContent = '正在创建房间…';
   connect();
 });
 
@@ -1008,14 +1030,70 @@ function updateRoomCodeInput() {
 ui.roomCodeInput.addEventListener('input', updateRoomCodeInput);
 
 ui.copyBtn.addEventListener('click', () => {
+  const text = roomCode || '';
   const done = () => {
     ui.copyBtn.textContent = '已复制';
     setTimeout(() => (ui.copyBtn.textContent = '复制房间号'), 1600);
   };
-  if (navigator.clipboard && window.isSecureContext) {
-    navigator.clipboard.writeText(roomCode).then(done).catch(() => prompt('房间号：', roomCode));
-  } else {
-    prompt('房间号：', roomCode);
+  const fallbackManual = () => {
+    if (/MicroMessenger/i.test(navigator.userAgent || '')) {
+      // 微信自带浏览器屏蔽 prompt：改在页面内提示长按复制
+      ui.hint.textContent = '复制失败，请长按房间号手动复制';
+    } else {
+      const r = prompt('房间号：', text);
+      if (r !== null) done();
+    }
+  };
+
+  // 1) 微信自带浏览器：走微信内置剪贴板桥（prompt/execCommand 都可能被 XWeb 屏蔽）
+  if (window.WeixinJSBridge && typeof window.WeixinJSBridge.invoke === 'function') {
+    try {
+      window.WeixinJSBridge.invoke(
+        'clipboardData',
+        { data: text, type: 'text/plain' },
+        (res) => {
+          const errMsg = res && res.err_msg ? String(res.err_msg) : '';
+          if (errMsg === 'clipboardData:ok' || errMsg.indexOf('ok') >= 0) done();
+          else legacyCopy();
+        }
+      );
+      return;
+    } catch {}
+  }
+
+  legacyCopy();
+
+  function legacyCopy() {
+    // 2) 安全上下文（HTTPS/localhost）：标准剪贴板 API
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done).catch(execCopy);
+      return;
+    }
+    execCopy();
+  }
+
+  function execCopy() {
+    // 3) 传统 execCommand 兜底（HTTP 环境，必须由用户点击触发）
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      ta.style.top = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (ok) {
+        done();
+        return;
+      }
+    } catch {}
+    // 4) 最后兜底：提示手动长按复制（微信下 prompt 无效，改用页内提示）
+    fallbackManual();
   }
 });
 

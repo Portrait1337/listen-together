@@ -32,6 +32,7 @@ const ONLINE_RATE_WINDOW_MS = Number(process.env.ONLINE_RATE_WINDOW_MS) || 10000
 const ONLINE_RATE_MAX = Number(process.env.ONLINE_RATE_MAX) || 10;
 const ONLINE_VIP_CACHE_TTL_MS = 10 * 60 * 1000; // 会员播放地址缓存 10 分钟（CDN 地址约 20 分钟有效）
 const ONLINE_MAX_CONCURRENT_DOWNLOADS = Number(process.env.ONLINE_MAX_CONCURRENT_DOWNLOADS) || 3; // 在线歌曲并发下载数上限，防带宽/连接被刷爆
+const ONLINE_MAX_CONCURRENT_SEARCHES = Number(process.env.ONLINE_MAX_CONCURRENT_SEARCHES) || 5; // 在线搜索并发上限（每次搜索最多发 4 个第三方请求），防出站请求放大
 const ONLINE_FILE_TTL_MS = Number(process.env.ONLINE_FILE_TTL_MS) || 24 * 60 * 60 * 1000; // 在线下载文件无人引用 24 小时后清理（缓存性质，可重新下载）
 const ONLINE_CLEAN_INTERVAL_MS = Number(process.env.ONLINE_CLEAN_INTERVAL_MS) || 60 * 60 * 1000; // 在线下载文件清理间隔
 
@@ -122,6 +123,7 @@ const onlineHits = new Map(); // ip -> [时间戳]
 const onlineCache = new Map(); // q -> { at, data }
 const onlineFiles = new Map(); // "provider:remoteId" -> 文件名
 let onlineDownloads = 0; // 当前进行中的在线下载数（并发上限用）
+let onlineSearches = 0; // 当前进行中的在线搜索数（并发上限用）
 const onlineVipCache = new Map(); // trackId -> { url, at }，会员播放地址短缓存
 let neteaseVip = { valid: false, nickname: '' }; // 会员登录状态，10 分钟刷新一次
 
@@ -419,14 +421,24 @@ app.get('/api/online/search', async (req, res) => {
   if (cached && Date.now() - cached.at < ONLINE_CACHE_TTL_MS) {
     return respond(cached.data);
   }
+  // 并发搜索上限：每次搜索最多发起 4 个第三方请求（咪咕 3 页 + 网易云 1），
+  // 频率限速挡不住单次打满配额的并发，不限并发会被刷爆出站连接和第三方 API
+  if (onlineSearches >= ONLINE_MAX_CONCURRENT_SEARCHES) {
+    return res.status(429).json({ error: '搜索繁忙，请稍后再试' });
+  }
+  onlineSearches += 1;
+  let data;
   try {
-    const data = await online.searchOnline(q, { source });
-    onlineCache.set(cacheKey, { at: Date.now(), data });
-    if (onlineCache.size > 200) onlineCache.delete(onlineCache.keys().next().value);
-    respond(data);
+    data = await online.searchOnline(q, { source });
   } catch {
     res.status(502).json({ error: '在线曲库暂时不可用，请稍后再试' });
+    return;
+  } finally {
+    onlineSearches -= 1;
   }
+  onlineCache.set(cacheKey, { at: Date.now(), data });
+  if (onlineCache.size > 200) onlineCache.delete(onlineCache.keys().next().value);
+  respond(data);
 });
 
 app.post('/api/online/add', async (req, res) => {
@@ -601,7 +613,10 @@ function snapshot(room) {
 }
 
 function membersList(room) {
-  return Array.from(room.members.values()).map((m) => ({ nickname: m.nickname }));
+  // 同一昵称只展示一次：微信等场景可能残留旧连接/重复连接，后加入的覆盖先加入的
+  const byNick = new Map();
+  for (const m of room.members.values()) byNick.set(m.nickname, m);
+  return Array.from(byNick.values()).map((m) => ({ nickname: m.nickname }));
 }
 
 function broadcast(room, msg) {
@@ -770,7 +785,35 @@ function handleControl(room, msg) {
 // maxPayload：正常消息（控制/聊天/心跳）都远小于 64KB，限制单条消息大小防内存轰炸
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
 
+// 心跳：定时 ping 所有连接，连续 2 轮（默认约 90 秒）无 pong 视为死连接断开。
+// 防止微信切后台/网络切换留下的半开连接长期占位，导致同一用户重复出现在成员列表、
+// 以及死连接白白占用广播资源和连接数上限；2 轮容错避免锁屏/切后台的短暂冻结被误杀。
+const WS_HEARTBEAT_MS = Number(process.env.WS_HEARTBEAT_MS) || 30000;
+setInterval(() => {
+  for (const client of wss.clients) {
+    if (client.isAlive === false) {
+      client.heartbeatMissed = (client.heartbeatMissed || 0) + 1;
+      if (client.heartbeatMissed >= 2) {
+        client.terminate();
+        continue;
+      }
+    } else {
+      client.heartbeatMissed = 0;
+    }
+    client.isAlive = false;
+    try {
+      client.ping();
+    } catch {
+      client.terminate();
+    }
+  }
+}, WS_HEARTBEAT_MS).unref();
+
 wss.on('connection', (ws) => {
+  ws.isAlive = true;
+  ws.on('pong', () => {
+    ws.isAlive = true;
+  });
   // 连接数上限：无认证场景下防刷连接耗尽内存/句柄
   if (wss.clients.size > MAX_WS_CONNECTIONS) {
     ws.close(1013, '服务器繁忙，请稍后再试');
