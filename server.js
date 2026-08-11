@@ -197,6 +197,16 @@ function cleanupOrphanUploads() {
   }
 }
 
+// 播放列表原本为空时，加入第一首歌后自动开始播放
+function ensureFirstTrack(room) {
+  if (room.currentIndex < 0) {
+    room.currentIndex = 0;
+    room.positionMs = 0;
+    room.updatedAt = Date.now();
+    room.playing = true;
+  }
+}
+
 // 清理无人引用的在线下载文件：在线歌曲是缓存性质（随时可重新下载），
 // 长时间没人引用就删掉，防止 library/online 无限增长占满磁盘。
 // 与上传文件不同：上传是用户数据，在线下载是派生缓存，清理可以更积极。
@@ -287,11 +297,7 @@ app.post('/api/upload', beginUpload, (req, res, next) => {
     uploader: String(req.body.nickname || '匿名').trim().slice(0, 20) || '匿名',
   };
   room.playlist.push(track);
-  if (room.currentIndex < 0) {
-    room.currentIndex = 0;
-    room.positionMs = 0;
-    room.updatedAt = Date.now();
-  }
+  ensureFirstTrack(room);
   broadcast(room, snapshot(room));
   res.json({ ok: true, track });
 });
@@ -383,11 +389,7 @@ app.post('/api/library/add', (req, res) => {
     fromLibrary: true,
   };
   room.playlist.push(track);
-  if (room.currentIndex < 0) {
-    room.currentIndex = 0;
-    room.positionMs = 0;
-    room.updatedAt = Date.now();
-  }
+  ensureFirstTrack(room);
   broadcast(room, snapshot(room));
   res.json({ ok: true, track });
 });
@@ -540,11 +542,7 @@ app.post('/api/online/add', async (req, res) => {
     };
   }
   room.playlist.push(track);
-  if (room.currentIndex < 0) {
-    room.currentIndex = 0;
-    room.positionMs = 0;
-    room.updatedAt = Date.now();
-  }
+  ensureFirstTrack(room);
   broadcast(room, snapshot(room));
   res.json({ ok: true, track });
 });

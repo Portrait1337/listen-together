@@ -173,8 +173,7 @@ test('可以从歌单删除歌曲，删当前播放的歌会自动切到下一�
   const id3 = state.playlist[2].id;
   assert.equal(state.currentIndex, 0);
 
-  // 开始播放第一首
-  alice.send({ type: 'control', action: 'play' });
+  // 空列表加入第一首后已自动开始播放
   state = await alice.waitForState((s) => s.playing === true);
 
   // 删除当前正在播的第一首，应自动切到原来的第二首继续播
@@ -226,7 +225,6 @@ test('单曲循环模式：播完停在当前歌并重新开始', async () => {
   await uploadTrack(created.code, 'song2.wav');
   await alice.waitForState((s) => s.playlist.length === 2);
 
-  alice.send({ type: 'control', action: 'play' });
   let state = await alice.waitForState((s) => s.playing === true);
   assert.equal(state.playMode, 'order');
   const playingBefore = state.playing;
@@ -258,7 +256,6 @@ test('顺序模式：播完切到下一首', async () => {
   await uploadTrack(created.code, 'song1.wav');
   await uploadTrack(created.code, 'song2.wav');
   await alice.waitForState((s) => s.playlist.length === 2);
-  alice.send({ type: 'control', action: 'play' });
   let state = await alice.waitForState((s) => s.playing === true);
   const orderBefore = state.currentIndex;
   alice.send({ type: 'control', action: 'ended', trackId: state.playlist[state.currentIndex].id });
@@ -276,7 +273,6 @@ test('随机模式：播完切到另一首', async () => {
   await alice.waitForState((s) => s.playlist.length === 2);
   alice.send({ type: 'control', action: 'set_mode', mode: 'shuffle' });
   let state = await alice.waitForState((s) => s.playMode === 'shuffle');
-  alice.send({ type: 'control', action: 'play' });
   state = await alice.waitForState((s) => s.playing === true);
   const shuffleBefore = state.currentIndex;
   alice.send({ type: 'control', action: 'ended', trackId: state.playlist[state.currentIndex].id });
@@ -293,7 +289,6 @@ test('同一首歌的播完信号在 10 秒内只处理一次', async () => {
 
   await uploadTrack(created.code, 'song.wav');
   await alice.waitForState((s) => s.playlist.length === 1);
-  alice.send({ type: 'control', action: 'play' });
   let state = await alice.waitForState((s) => s.playing === true);
   const trackId = state.playlist[0].id;
 
@@ -324,7 +319,6 @@ test('迟到的旧歌“播完”信号不会切歌', async () => {
   await uploadTrack(created.code, 'song1.wav');
   await uploadTrack(created.code, 'song2.wav');
   await alice.waitForState((s) => s.playlist.length === 2);
-  alice.send({ type: 'control', action: 'play' });
   let state = await alice.waitForState((s) => s.playing === true);
   const firstId = state.playlist[state.currentIndex].id;
 
@@ -359,7 +353,6 @@ test('单曲循环下短歌再次播完会被处理，不会被长去重窗口�
   await alice.waitForState((s) => s.playlist.length === 1);
   alice.send({ type: 'control', action: 'set_mode', mode: 'single' });
   await alice.waitForState((s) => s.playMode === 'single');
-  alice.send({ type: 'control', action: 'play' });
   await alice.waitForState((s) => s.playing === true);
 
   const trackId = (await alice.waitForState(() => true)).playlist[0].id;
@@ -396,6 +389,29 @@ test('伪装成音频的 html 文件会被上传校验拒绝', async () => {
   assert.equal(res.status, 400);
   const data = await res.json();
   assert.match(data.error, /只支持音频文件/);
+
+  await alice.close();
+});
+
+test('播放列表为空时加入第一首歌会自动开始播放', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitForState((s) => s.code);
+  await alice.waitForState((s) => s.playlist.length === 0 && s.playing === false);
+
+  // 空列表加入第一首：自动开始播放
+  await uploadTrack(created.code, 'song1.wav');
+  let state = await alice.waitForState((s) => s.playlist.length === 1);
+  assert.equal(state.playing, true);
+  assert.equal(state.currentIndex, 0);
+
+  // 已有歌曲时再加一首：不改变播放状态（先暂停，再验证仍保持暂停）
+  alice.send({ type: 'control', action: 'pause' });
+  state = await alice.waitForState((s) => s.playing === false);
+  await uploadTrack(created.code, 'song2.wav');
+  state = await alice.waitForState((s) => s.playlist.length === 2);
+  assert.equal(state.playing, false);
+  assert.equal(state.currentIndex, 0);
 
   await alice.close();
 });
