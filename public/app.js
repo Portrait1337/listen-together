@@ -67,6 +67,8 @@ const LARGE_SEEK_MS = 30000; // iOS FLAC 大幅跳转阈值：原地 seek 易让
 const ALIGN_WATCH_MS = 20000; // 一次对齐流程的最长观察期
 const ALIGN_STALL_MS = 15000; // 对齐流程超过该时间仍未完成 → 重建播放器
 const ALIGN_MAX_RELOADS = 2; // 同一首歌最多自动重建 2 次，避免无限循环
+const IOS_BEHIND_SEEK_MS = 2500; // iOS FLAC 比房间落后超过该值就重新对齐
+const IOS_DRIFT_COOLDOWN_MS = 8000; // 两次落后纠偏之间的冷却，避免反复 seek 卡顿
 let lastSeekDoneAt = 0;
 let seekResumeTimer = null;
 let lastTickMs = 0;
@@ -349,7 +351,6 @@ function doSeek(targetMs, force, manual) {
   lastSeekAt = Date.now();
   lastSeekDoneAt = Date.now();
   stallRetries = 0;
-  lastTickMs = targetMs;
   lastTickAt = Date.now();
   if (IS_IOS && wasPlaying) {
     // 不立即 play：等 seeked 真正完成后恢复，避免"进度在走但没有声音"
@@ -387,7 +388,6 @@ function reloadAndSeek(targetMs) {
   lastSeekAt = Date.now();
   lastSeekDoneAt = Date.now();
   stallRetries = 0;
-  lastTickMs = targetMs;
   lastTickAt = Date.now();
   if (wasPlaying) safePlay();
 }
@@ -436,7 +436,7 @@ function applyTrackAndSync() {
     alignStartedAt = Date.now();
     alignStallReloads = 0;
     lastTickMs = 0;
-    lastTickAt = 0;
+    lastTickAt = Date.now();
     stallRetries = 0;
     // 边播边缓冲：不等数据就绪，先立即尝试播放，能出声就出声
     if (state.playing) safePlay();
@@ -529,19 +529,30 @@ audio.addEventListener('seeked', () => {
 });
 
 audio.addEventListener('timeupdate', () => {
+  const now = Date.now();
+  const tMs = audio.currentTime * 1000;
+  // 记录"播放头实际移动"的时间：只在实际前进时刷新，供卡死检测/落后纠偏使用
+  if (Math.abs(tMs - lastTickMs) >= 250) {
+    lastTickMs = tMs;
+    lastTickAt = now;
+  }
   const durMs = currentDurMs();
   if (durMs > 0) ui.seek.max = Math.floor(durMs);
   if (!dragging) ui.seek.value = audio.currentTime * 1000;
   renderTime();
   // 对齐观察期：持续核对进度，偏差大就再跳，到位就结束
-  if (needAlign && Date.now() < alignWatchUntil && state && state.playing) {
+  if (needAlign && now < alignWatchUntil && state && state.playing) {
     const target = currentTargetMs();
     const diff = Math.abs(audio.currentTime * 1000 - target);
     if (diff <= 3000) {
       completeAlignment();
-    } else if (SyncPolicy.shouldAutoSeek(audio.currentTime * 1000, target, lastAlignSeekAt, Date.now())) {
-      alignTo(target, true);
-      lastAlignSeekAt = Date.now();
+    } else if (SyncPolicy.shouldAutoSeek(audio.currentTime * 1000, target, lastAlignSeekAt, now)) {
+      lastAlignSeekAt = now;
+      if (IS_IOS && isFlacTrack() && target - audio.currentTime * 1000 >= LARGE_SEEK_MS) {
+        reloadAndSeek(target); // 差距太大：重建播放器，避免原地大幅 seek 卡死
+      } else {
+        alignTo(target, true);
+      }
     }
   }
 });
@@ -578,46 +589,49 @@ setInterval(() => {
     if (needAlign && now < alignWatchUntil) return; // 对齐进行中，避免从 0 抢先播放
     if (audio.paused) safePlay();
     if (dragging) {
-      lastTickMs = audio.currentTime * 1000;
-      lastTickAt = now;
       stallRetries = 0;
       return;
     }
-    // 只在最近 seek 过（20 秒内）才查卡死：普通网络缓冲会让 currentTime
-    // 短暂不动，强制重新 seek 反而可能打断正常缓冲
-    if (IS_IOS && isFlacTrack() && now - lastSeekAt < SEEK_WATCH_MS) {
+    if (IS_IOS && isFlacTrack()) {
       const tMs = audio.currentTime * 1000;
       const durMs = currentDurMs();
-      // 已接近结尾：让自然播完流程处理，不误判为卡住
-      if (durMs > 0 && tMs >= durMs - 2500) {
-        lastTickMs = tMs;
-        lastTickAt = now;
-        stallRetries = 0;
-        return;
+      const nearEnd = durMs > 0 && tMs >= durMs - 2500;
+      const progressRecent = now - lastTickAt < 1500; // 播放头最近 1.5 秒内真的在走
+      if (progressRecent) stallRetries = 0;
+      // 落后纠偏：缓冲/跳转完成后播放头在走，但比房间落后太多 → 重新对齐。
+      // 这是 iOS FLAC"固定落后 5-10 秒"的根因修复：seek 后缓冲几秒才出声，
+      // 出声时房间已经走到前面，且此前没有任何机制再把进度拉回来。
+      if (!needAlign && !nearEnd && progressRecent && !audio.paused) {
+        const target = currentTargetMs();
+        if (target - tMs > IOS_BEHIND_SEEK_MS && now - lastSeekDoneAt >= IOS_DRIFT_COOLDOWN_MS) {
+          lastSeekAt = now;
+          if (target - tMs >= LARGE_SEEK_MS) {
+            reloadAndSeek(target); // 差距太大：重建播放器再对齐，避免原地大幅 seek 卡死
+          } else {
+            alignTo(target, true); // 暂停→跳转→seeked 后恢复
+          }
+          return;
+        }
       }
-      if (Math.abs(tMs - lastTickMs) >= 250) {
-        lastTickMs = tMs;
-        lastTickAt = now;
-        stallRetries = 0;
-      } else if (now - lastTickAt >= SEEK_STALL_MS && stallRetries < 3) {
-        stallRetries++;
-        lastTickAt = now;
-        const target = needAlign ? targetPosition() : tMs;
-        doSeek(target, true, false); // 强制"暂停→跳转→恢复"，打破卡死状态
-      } else if (now - lastTickAt >= SEEK_STALL_MS) {
-        // 多次 seek 都无效：重建播放器，走正常对齐流程（计数交给对齐卡死检测）
-        alignStallReloads = 0;
-        recoverAlignment();
-        return;
+      // 卡缓冲看门狗：只在"有数据（readyState≥2）但播放头不动"时动作；
+      // 慢网络正常缓冲（readyState 0/1）不打扰。只在最近 seek 过（20 秒内）启用。
+      if (now - lastSeekAt < SEEK_WATCH_MS && audio.readyState >= 2 && !nearEnd && !progressRecent && now - lastTickAt >= SEEK_STALL_MS) {
+        if (stallRetries < 3) {
+          stallRetries++;
+          lastTickAt = now;
+          alignTo(tMs, true); // 强制"暂停→跳转→恢复"，打破卡死状态
+        } else {
+          // 多次 seek 都无效：重建播放器，走正常对齐流程（计数交给对齐卡死检测）
+          stallRetries = 0;
+          alignStallReloads = 0;
+          recoverAlignment();
+          return;
+        }
       }
     } else {
-      lastTickMs = audio.currentTime * 1000;
-      lastTickAt = now;
       stallRetries = 0;
     }
   } else {
-    lastTickMs = audio.currentTime * 1000;
-    lastTickAt = now;
     stallRetries = 0;
   }
 }, 2000);
