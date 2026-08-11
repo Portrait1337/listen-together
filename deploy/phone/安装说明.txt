@@ -1,0 +1,33 @@
+旧手机部署「一起听」操作步骤
+================================
+
+【第 1 步】安装 Termux
+  从 F-Droid（f-droid.org）下载 Termux 安装。
+  不要用手机应用商店里的版本（已废弃）。
+
+【第 2 步】把部署包传进手机
+  方式一（推荐，需要一点电脑操作）：
+    Termux 里执行：pkg install openssh -y && passwd && sshd
+    Mac 终端执行：scp -P 8022 phone-部署包.zip 用户名@手机IP:~/
+    用户名 = Termux 里执行 whoami 的结果；手机IP 看手机 WiFi 详情
+  方式二：数据线拷贝 / 微信文件传输助手发送，在 Termux 里放到 ~/ 下
+
+【第 3 步】解压并运行脚本（跑两次）
+  unzip phone-部署包.zip -d ~/
+  bash phone-setup.sh        ← 第一次：自动安装 Node.js 等依赖
+  完全关闭 Termux，重新打开
+  bash phone-setup.sh        ← 第二次：自动配置常驻服务、开机自启
+
+【第 4 步】手机系统设置（必做）
+  1. 设置→应用→Termux→电池→省电策略改为「不限制」
+  2. WiFi 设为永不休眠；关闭自动省电模式
+  3. 多任务界面把 Termux 下拉锁定
+  4. 装 Termux:Boot（F-Droid 下载，装完打开一次），开机自启才会生效
+  5. 一直插电使用；注意电池别鼓包
+
+【第 5 步】验证
+  手机浏览器打开 http://localhost:3000
+  同一 WiFi 下其他设备打开 http://手机IP:3000
+  重启一次手机，等 1 分钟再验证，确认自动恢复
+
+公网访问的部分在路由器上配置（见 router-公网IP配置.md），手机不需要再动。

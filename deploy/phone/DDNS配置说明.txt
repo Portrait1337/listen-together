@@ -1,0 +1,36 @@
+DDNS 配置说明（手机自动更新域名）
+====================================
+
+背景：路由器（联通全屋通 MSG1500）没有 DDNS 功能，
+所以让手机自己定时把公网 IP 更新到域名解析上。
+
+【第 1 步】等域名审查通过
+  域名显示"正常"后，确认 DNSPod 控制台（dnspod.cn）里能看到 emenlisten.top
+
+【第 2 步】创建 API Token
+  1. 用腾讯云账号登录 dnspod.cn
+  2. 右上角用户中心 → 密钥管理 → API Token → 创建 Token
+  3. 会得到两串：ID 和 Token，都复制保存
+
+【第 3 步】在手机 Termux 里安装工具
+  pkg install jq cronie
+  把 ddnspod-update.sh 放到 ~/ddns/ 目录：
+  mkdir -p ~/ddns && cp ~/ddnspod-update.sh ~/ddns/
+
+【第 4 步】填写 Token
+  编辑 ~/ddns/ddnspod-update.sh（用 nano 或 vi），
+  把 ID="你的DNSPod_Token_ID" 和 TOKEN="你的DNSPod_Token"
+  换成第 2 步拿到的两串，保存
+
+【第 5 步】手动运行一次验证
+  bash ~/ddns/ddnspod-update.sh
+  看到"更新成功 → 183.191.x.x"就对了
+
+【第 6 步】设置每 5 分钟自动检查
+  crontab -e
+  加一行：
+  */5 * * * * bash ~/ddns/ddnspod-update.sh >> ~/ddns/ddns.log 2>&1
+  保存退出，然后执行：
+  sv-enable crond && sv up crond
+
+以后公网 IP 一变，最多 5 分钟域名就会指向新 IP。
