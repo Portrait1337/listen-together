@@ -63,12 +63,19 @@ const IS_IOS =
 const SEEK_COOLDOWN_MS = 3000;
 const SEEK_STALL_MS = 3000;
 const SEEK_WATCH_MS = 20000; // seek 后 20 秒内才启用卡缓冲看门狗，避免误伤正常网络缓冲
+const LARGE_SEEK_MS = 30000; // iOS FLAC 大幅跳转阈值：原地 seek 易让 WebKit 解码器卡死
+const ALIGN_WATCH_MS = 20000; // 一次对齐流程的最长观察期
+const ALIGN_STALL_MS = 15000; // 对齐流程超过该时间仍未完成 → 重建播放器
+const ALIGN_MAX_RELOADS = 2; // 同一首歌最多自动重建 2 次，避免无限循环
 let lastSeekDoneAt = 0;
 let seekResumeTimer = null;
 let lastTickMs = 0;
 let lastTickAt = 0;
 let stallRetries = 0;
 let seekToken = 0; // 每次 seek/暂停/切歌递增，用于丢弃过期的"恢复播放"回调
+let pendingSeekTarget = null; // iOS FLAC 大跳转重载后要对齐的目标位置
+let alignStartedAt = 0; // 当前对齐流程开始时间（卡死检测用）
+let alignStallReloads = 0; // 当前对齐流程已自动重建次数
 let creatingRoom = false;
 let dragging = false;
 let enteredRoom = false;
@@ -242,6 +249,13 @@ function targetPosition() {
   return state.playing ? state.positionMs + (serverNow - state.updatedAt) : state.positionMs;
 }
 
+// 对齐期间的目标位置：手动大跳转以本地目标为准，其余用服务器房间进度
+function currentTargetMs() {
+  if (pendingSeekTarget !== null) return pendingSeekTarget;
+  if (!state) return 0;
+  return state.playing ? targetPosition() : state.positionMs;
+}
+
 function currentTrack() {
   return state && Array.isArray(state.playlist) ? state.playlist[state.currentIndex] || null : null;
 }
@@ -269,6 +283,51 @@ function cancelSeekResume() {
   clearTimeout(seekResumeTimer);
 }
 
+// 对齐流程完成：清理状态并刷新 UI
+function completeAlignment() {
+  needAlign = false;
+  pendingPlay = false;
+  alignStartedAt = 0;
+  alignStallReloads = 0;
+  renderTime();
+}
+
+// 重建播放器并重新进入对齐流程（iOS FLAC 解码器卡死/对齐超时时的最后一招）
+function recoverAlignment() {
+  cancelSeekResume();
+  const shouldPlay = !!(state && state.playing);
+  alignStallReloads++;
+  pendingSeekTarget = null;
+  try {
+    audio.pause();
+    audio.load();
+  } catch {}
+  needAlign = true;
+  initialSeekDone = false;
+  pendingPlay = shouldPlay;
+  alignWatchUntil = Date.now() + ALIGN_WATCH_MS;
+  alignStartedAt = Date.now();
+  lastSeekAt = Date.now();
+  lastSeekDoneAt = Date.now();
+  stallRetries = 0;
+  lastTickMs = 0;
+  lastTickAt = Date.now();
+  if (shouldPlay) safePlay();
+}
+
+// seek 后若 seeked 一直不触发，定时兜底恢复播放
+function scheduleAlignResume() {
+  const token = seekToken; // doSeek 已递增过 token
+  const retry = () => {
+    if (token !== seekToken) return;
+    if (!audio.paused) return;
+    safePlay();
+  };
+  audio.addEventListener('seeked', retry, { once: true });
+  clearTimeout(seekResumeTimer);
+  seekResumeTimer = setTimeout(retry, 3000);
+}
+
 function doSeek(targetMs, force, manual) {
   if (!Number.isFinite(targetMs) || targetMs < 0) return;
   const durMs = currentDurMs();
@@ -293,7 +352,7 @@ function doSeek(targetMs, force, manual) {
   lastTickMs = targetMs;
   lastTickAt = Date.now();
   if (IS_IOS && wasPlaying) {
-    safePlay(); // 用户手势内立即恢复；seeked 后再补一次兜底
+    // 不立即 play：等 seeked 真正完成后恢复，避免"进度在走但没有声音"
     const retry = () => {
       if (token !== seekToken) return; // 已被暂停/切歌/新 seek 取代
       if (!audio.paused) return;
@@ -309,8 +368,40 @@ function alignTo(targetMs, force) {
   doSeek(targetMs, force, false);
 }
 
+// iOS FLAC 大幅跳转：原地 seek 会让 WebKit 解码器卡死（进度在走但没有声音），
+// 改成重载播放器、走标准对齐流程，重建解码管线后再跳到目标位置
+function reloadAndSeek(targetMs) {
+  const wasPlaying = !audio.paused;
+  cancelSeekResume();
+  pendingSeekTarget = targetMs;
+  try {
+    audio.pause();
+    audio.load();
+  } catch {}
+  needAlign = true;
+  initialSeekDone = false;
+  pendingPlay = wasPlaying;
+  alignWatchUntil = Date.now() + ALIGN_WATCH_MS;
+  alignStartedAt = Date.now();
+  alignStallReloads = 0;
+  lastSeekAt = Date.now();
+  lastSeekDoneAt = Date.now();
+  stallRetries = 0;
+  lastTickMs = targetMs;
+  lastTickAt = Date.now();
+  if (wasPlaying) safePlay();
+}
+
 // 用户手动拖动进度条：本地立即跳转（不等服务器回包），允许拖到任意位置
 function userSeek(targetMs) {
+  if (IS_IOS && isFlacTrack() && !audio.paused) {
+    const jump = targetMs - audio.currentTime * 1000;
+    // 大幅向前（或向后）跳：原地 seek 不可靠，直接重建播放器
+    if (Math.abs(jump) >= LARGE_SEEK_MS) {
+      reloadAndSeek(targetMs);
+      return;
+    }
+  }
   doSeek(targetMs, true, true);
 }
 
@@ -319,6 +410,9 @@ function applyTrackAndSync() {
   const track = state.playlist[state.currentIndex];
   if (!track) {
     cancelSeekResume();
+    pendingSeekTarget = null;
+    alignStartedAt = 0;
+    alignStallReloads = 0;
     audio.pause();
     audio.removeAttribute('src');
     needAlign = false;
@@ -330,11 +424,17 @@ function applyTrackAndSync() {
   const trackChanged = !audio.src || audio.src.indexOf(track.url) === -1;
   if (trackChanged) {
     cancelSeekResume();
+    pendingSeekTarget = null;
+    try {
+      audio.pause();
+    } catch {}
     audio.src = track.url;
     needAlign = true;
     initialSeekDone = false;
     pendingPlay = state.playing;
-    alignWatchUntil = Date.now() + 20000;
+    alignWatchUntil = Date.now() + ALIGN_WATCH_MS;
+    alignStartedAt = Date.now();
+    alignStallReloads = 0;
     lastTickMs = 0;
     lastTickAt = 0;
     stallRetries = 0;
@@ -350,6 +450,9 @@ function applyTrackAndSync() {
   needAlign = false;
   pendingPlay = false;
   alignWatchUntil = 0;
+  alignStartedAt = 0;
+  alignStallReloads = 0;
+  pendingSeekTarget = null;
   // 只有偏差足够大才跳转；不要每次收到状态广播都强制 seek，
   // iOS 播放中反复 seek 会导致没有声音或断断续续
   alignTo(target, false);
@@ -369,26 +472,27 @@ audio.addEventListener('loadedmetadata', () => {
 
 // 数据就绪后的处理（loadeddata / canplay）：
 // - 暂停中的房间：跳到房间进度，不播放
-// - 播放中的房间：如果还没开始出声就先播起来，等真的开始播放后再对齐
+// - 播放中的房间：直接"暂停→跳转→恢复"，不依赖 playing 事件
+//   （iOS FLAC 无声卡死时 playing 可能不触发，等 playing 会永远卡住）
 function startAlignedPlayback() {
   if (!needAlign || initialSeekDone) return;
   if (state && !state.playing) {
+    pendingSeekTarget = null;
     initialSeekDone = true;
     alignTo(state.positionMs, true);
-    needAlign = false;
-    pendingPlay = false;
-    renderTime();
+    completeAlignment();
     return;
   }
-  if (state && state.playing && audio.paused && pendingPlay) {
-    safePlay(); // 边播边缓冲：先出声，别等数据全就绪
+  if (state && state.playing && pendingPlay) {
+    alignAfterStarted();
   }
 }
 
 // 已经实际开始播放：先暂停跳到目标进度，再继续播
 function alignAfterStarted() {
   if (!needAlign || initialSeekDone) return;
-  const target = state.playing ? targetPosition() : state.positionMs;
+  const target = currentTargetMs();
+  pendingSeekTarget = null;
   const diff = Math.abs(audio.currentTime * 1000 - target);
   initialSeekDone = true;
   lastAlignSeekAt = Date.now();
@@ -397,10 +501,10 @@ function alignAfterStarted() {
     // iOS 在播放中直接 seek 会变成进度在走但没有声音
     audio.pause();
     alignTo(target, true);
+    scheduleAlignResume(); // seeked 一直不触发时的兜底
   } else {
-    needAlign = false;
-    pendingPlay = false;
-    renderTime();
+    completeAlignment();
+    if (state && state.playing && audio.paused) safePlay();
   }
 }
 
@@ -412,17 +516,14 @@ audio.addEventListener('playing', () => {
     // 已经出声但还没对齐：先暂停跳到目标进度再继续播
     alignAfterStarted();
   } else if (needAlign) {
-    needAlign = false;
-    pendingPlay = false;
+    completeAlignment();
   }
 });
 
 // 跳转完成后确认对齐结束
 audio.addEventListener('seeked', () => {
   if (needAlign && initialSeekDone) {
-    needAlign = false;
-    pendingPlay = false;
-    renderTime();
+    completeAlignment();
     if (state && state.playing && audio.paused) safePlay();
   }
 });
@@ -434,11 +535,10 @@ audio.addEventListener('timeupdate', () => {
   renderTime();
   // 对齐观察期：持续核对进度，偏差大就再跳，到位就结束
   if (needAlign && Date.now() < alignWatchUntil && state && state.playing) {
-    const target = targetPosition();
+    const target = currentTargetMs();
     const diff = Math.abs(audio.currentTime * 1000 - target);
     if (diff <= 3000) {
-      needAlign = false;
-      pendingPlay = false;
+      completeAlignment();
     } else if (SyncPolicy.shouldAutoSeek(audio.currentTime * 1000, target, lastAlignSeekAt, Date.now())) {
       alignTo(target, true);
       lastAlignSeekAt = Date.now();
@@ -458,11 +558,23 @@ audio.addEventListener('ended', () => {
 });
 
 // 每 2 秒检查播放状态；播放中不再自动跳转（Safari 反复跳转会导致声音断断续续）。
+// 对齐卡死检测：needAlign 超过 15 秒仍未完成（如 iOS FLAC seeked 永不触发），
+// 自动重建播放器重新对齐，最多 2 次，避免切到下一首歌后永久无声。
 // 同时做 iOS FLAC 卡缓冲看门狗：播放中 currentTime 长时间不动，说明 seek 后卡住了，
 // 强制重新 seek，最多 3 次；仍卡就重建播放器并按房间进度重新对齐。
 setInterval(() => {
   const now = Date.now();
   if (state && state.playing) {
+    if (needAlign && alignStartedAt && !audio.paused && now - alignStartedAt >= ALIGN_STALL_MS) {
+      if (alignStallReloads < ALIGN_MAX_RELOADS) {
+        recoverAlignment();
+      } else {
+        // 自动重建次数用尽：不再重建，至少尝试从当前加载到的位置继续播放
+        alignStartedAt = now;
+        if (audio.paused) safePlay();
+      }
+      return;
+    }
     if (needAlign && now < alignWatchUntil) return; // 对齐进行中，避免从 0 抢先播放
     if (audio.paused) safePlay();
     if (dragging) {
@@ -493,19 +605,10 @@ setInterval(() => {
         const target = needAlign ? targetPosition() : tMs;
         doSeek(target, true, false); // 强制"暂停→跳转→恢复"，打破卡死状态
       } else if (now - lastTickAt >= SEEK_STALL_MS) {
-        // 多次 seek 都无效：重建播放器，走正常对齐流程
-        stallRetries = 0;
-        lastTickAt = now;
-        cancelSeekResume();
-        try {
-          audio.pause();
-          audio.load();
-        } catch {}
-        needAlign = true;
-        initialSeekDone = false;
-        pendingPlay = true;
-        alignWatchUntil = Date.now() + 20000;
-        safePlay();
+        // 多次 seek 都无效：重建播放器，走正常对齐流程（计数交给对齐卡死检测）
+        alignStallReloads = 0;
+        recoverAlignment();
+        return;
       }
     } else {
       lastTickMs = audio.currentTime * 1000;
@@ -530,6 +633,8 @@ function playLocally() {
   if (needAlign) {
     // 音频还没就绪：等对齐完成后再自动播放，避免从 0 抢跑
     pendingPlay = true;
+    // 数据其实已就绪但之前因暂停没对齐：直接开始"暂停→跳转→恢复"
+    if (audio.readyState >= 2) alignAfterStarted();
     return;
   }
   const p = audio.play();
@@ -704,9 +809,9 @@ function fmt(ms) {
 
 function renderTime() {
   let cur = audio.currentTime * 1000;
-  // 音频还没就绪/还没对齐时，先显示房间的真实进度，避免进房后进度条长时间卡在 0
+  // 音频还没就绪/还没对齐时，先显示对齐目标进度，避免进房/大跳转后进度条长时间卡在 0
   if (needAlign && state) {
-    cur = state.playing ? targetPosition() : state.positionMs;
+    cur = currentTargetMs();
   }
   const dur = currentDurMs();
   ui.timeLabel.textContent = fmt(cur) + ' / ' + fmt(dur);
