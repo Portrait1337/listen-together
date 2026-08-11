@@ -20,6 +20,19 @@ const SINGLE_LOOP_DEDUP_MS = Number(process.env.SINGLE_LOOP_DEDUP_MS) || 1500; /
 const MAX_WS_CONNECTIONS = Number(process.env.MAX_WS_CONNECTIONS) || 100; // 单实例最大 WebSocket 连接数，防无认证刷连接耗尽内存
 const MAX_WS_MSGS_PER_SECOND = Number(process.env.MAX_WS_MSGS_PER_SECOND) || 20; // 每连接每秒最大消息数，防刷屏轰炸拖垮全房间广播
 const AUDIO_EXTS = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus', '.wma', '.amr'];
+// 扩展名 → 标准 MIME：客户端（尤其微信）常把音频声明成 application/octet-stream，
+// 直接透传会让 COS 对象 Content-Type 错误，影响部分播放器/seek 行为
+const AUDIO_MIME = {
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac',
+  '.opus': 'audio/opus',
+  '.wma': 'audio/x-ms-wma',
+  '.amr': 'audio/amr',
+};
 
 // 目录支持环境变量覆盖：测试用它指向临时目录，避免污染/误删真实上传文件
 const UPLOAD_DIR = process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR) : path.join(__dirname, 'uploads');
@@ -323,7 +336,7 @@ app.post('/api/upload', beginUpload, (req, res, next) => {
   // 内容上云：本地临时落盘后转存 COS，播放地址指向云端，手机出口带宽只消耗一次
   const ext = (path.extname(req.file.originalname || '') || '.mp3').toLowerCase();
   const key = 'uploads/' + crypto.randomBytes(12).toString('hex') + ext;
-  const contentType = req.file.mimetype || 'audio/mpeg';
+  const contentType = AUDIO_MIME[ext] || req.file.mimetype || 'audio/mpeg';
   let url;
   if (cos.enabled()) {
     try {
