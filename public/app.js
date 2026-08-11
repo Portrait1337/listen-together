@@ -55,6 +55,20 @@ let pendingPlay = false; // 对齐完成后需要继续播放
 let alignWatchUntil = 0; // 对齐观察期截止时间
 let lastAlignSeekAt = 0; // 上次自动跳转的时间，用于限制播放中反复跳转
 let lastSeekAt = 0; // 上次任何跳转的时间，用于识别“跳转造成的假播完”
+// iOS FLAC 流式 seek 可靠性差（尤其向后拖），统一走"暂停→跳转→恢复"，
+// 并加跳转冷却与卡死看门狗，避免状态广播反复拉拽造成无限卡顿
+const IS_IOS =
+  /iP(hone|ad|od)/.test(navigator.userAgent || '') ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const SEEK_COOLDOWN_MS = 3000;
+const SEEK_STALL_MS = 3000;
+const SEEK_WATCH_MS = 20000; // seek 后 20 秒内才启用卡缓冲看门狗，避免误伤正常网络缓冲
+let lastSeekDoneAt = 0;
+let seekResumeTimer = null;
+let lastTickMs = 0;
+let lastTickAt = 0;
+let stallRetries = 0;
+let seekToken = 0; // 每次 seek/暂停/切歌递增，用于丢弃过期的"恢复播放"回调
 let creatingRoom = false;
 let dragging = false;
 let enteredRoom = false;
@@ -241,26 +255,70 @@ function currentDurMs() {
   return Number.isFinite(d) && d > 0 ? d * 1000 : 0;
 }
 
-function alignTo(targetMs, force) {
+// 当前曲目是否为 FLAC：iOS/微信里 FLAC 流式 seek 最容易卡缓冲
+function isFlacTrack() {
+  const t = currentTrack();
+  if (!t) return false;
+  if (t.type === 'flac') return true;
+  return /\.flac($|\?)/i.test(t.url || '');
+}
+
+// 取消"seek 后恢复播放"的兜底回调（用户暂停/切歌时必须失效，避免被自动重新播放）
+function cancelSeekResume() {
+  seekToken++;
+  clearTimeout(seekResumeTimer);
+}
+
+function doSeek(targetMs, force, manual) {
   if (!Number.isFinite(targetMs) || targetMs < 0) return;
   const durMs = currentDurMs();
-  if (durMs > 0) {
+  // 手动拖动不截断到结尾前 2 秒（用户就是要拖到那里）；自动对齐才截断
+  if (!manual && durMs > 0) {
     // 不允许跳到结尾之后；接近结尾时最多到结尾前 2 秒，避免一跳就触发“播完”
     targetMs = Math.min(targetMs, Math.max(0, durMs - 2000));
   }
   const diff = Math.abs(audio.currentTime * 1000 - targetMs);
-  if (force || diff > 600) {
-    try {
-      audio.currentTime = targetMs / 1000;
-      lastSeekAt = Date.now();
-    } catch {}
+  if (!force && diff <= 600) return;
+  // 冷却：非强制跳转 3 秒内不重复 seek，防止状态广播把刚拖过进度条的用户反复拉拽
+  if (!force && Date.now() - lastSeekDoneAt < SEEK_COOLDOWN_MS) return;
+  const token = ++seekToken;
+  const wasPlaying = !audio.paused;
+  if (IS_IOS && wasPlaying) audio.pause(); // iOS 播放中直接 seek 易卡缓冲
+  try {
+    audio.currentTime = targetMs / 1000;
+  } catch {}
+  lastSeekAt = Date.now();
+  lastSeekDoneAt = Date.now();
+  stallRetries = 0;
+  lastTickMs = targetMs;
+  lastTickAt = Date.now();
+  if (IS_IOS && wasPlaying) {
+    safePlay(); // 用户手势内立即恢复；seeked 后再补一次兜底
+    const retry = () => {
+      if (token !== seekToken) return; // 已被暂停/切歌/新 seek 取代
+      if (!audio.paused) return;
+      safePlay();
+    };
+    audio.addEventListener('seeked', retry, { once: true });
+    clearTimeout(seekResumeTimer);
+    seekResumeTimer = setTimeout(retry, 1500);
   }
+}
+
+function alignTo(targetMs, force) {
+  doSeek(targetMs, force, false);
+}
+
+// 用户手动拖动进度条：本地立即跳转（不等服务器回包），允许拖到任意位置
+function userSeek(targetMs) {
+  doSeek(targetMs, true, true);
 }
 
 function applyTrackAndSync() {
   if (!state) return;
   const track = state.playlist[state.currentIndex];
   if (!track) {
+    cancelSeekResume();
     audio.pause();
     audio.removeAttribute('src');
     needAlign = false;
@@ -271,11 +329,15 @@ function applyTrackAndSync() {
   const target = state.playing ? targetPosition() : state.positionMs;
   const trackChanged = !audio.src || audio.src.indexOf(track.url) === -1;
   if (trackChanged) {
+    cancelSeekResume();
     audio.src = track.url;
     needAlign = true;
     initialSeekDone = false;
     pendingPlay = state.playing;
     alignWatchUntil = Date.now() + 20000;
+    lastTickMs = 0;
+    lastTickAt = 0;
+    stallRetries = 0;
     // 边播边缓冲：不等数据就绪，先立即尝试播放，能出声就出声
     if (state.playing) safePlay();
     return; // 等数据就绪后再对齐
@@ -294,6 +356,7 @@ function applyTrackAndSync() {
   if (state.playing) {
     safePlay();
   } else {
+    cancelSeekResume();
     audio.pause();
   }
 }
@@ -394,11 +457,65 @@ audio.addEventListener('ended', () => {
   send({ type: 'control', action: 'ended', trackId: track ? track.id : '' });
 });
 
-// 每 2 秒检查播放状态；播放中不再自动跳转（Safari 反复跳转会导致声音断断续续）
+// 每 2 秒检查播放状态；播放中不再自动跳转（Safari 反复跳转会导致声音断断续续）。
+// 同时做 iOS FLAC 卡缓冲看门狗：播放中 currentTime 长时间不动，说明 seek 后卡住了，
+// 强制重新 seek，最多 3 次；仍卡就重建播放器并按房间进度重新对齐。
 setInterval(() => {
+  const now = Date.now();
   if (state && state.playing) {
-    if (needAlign && Date.now() < alignWatchUntil) return; // 对齐进行中，避免从 0 抢先播放
+    if (needAlign && now < alignWatchUntil) return; // 对齐进行中，避免从 0 抢先播放
     if (audio.paused) safePlay();
+    if (dragging) {
+      lastTickMs = audio.currentTime * 1000;
+      lastTickAt = now;
+      stallRetries = 0;
+      return;
+    }
+    // 只在最近 seek 过（20 秒内）才查卡死：普通网络缓冲会让 currentTime
+    // 短暂不动，强制重新 seek 反而可能打断正常缓冲
+    if (IS_IOS && isFlacTrack() && now - lastSeekAt < SEEK_WATCH_MS) {
+      const tMs = audio.currentTime * 1000;
+      const durMs = currentDurMs();
+      // 已接近结尾：让自然播完流程处理，不误判为卡住
+      if (durMs > 0 && tMs >= durMs - 2500) {
+        lastTickMs = tMs;
+        lastTickAt = now;
+        stallRetries = 0;
+        return;
+      }
+      if (Math.abs(tMs - lastTickMs) >= 250) {
+        lastTickMs = tMs;
+        lastTickAt = now;
+        stallRetries = 0;
+      } else if (now - lastTickAt >= SEEK_STALL_MS && stallRetries < 3) {
+        stallRetries++;
+        lastTickAt = now;
+        const target = needAlign ? targetPosition() : tMs;
+        doSeek(target, true, false); // 强制"暂停→跳转→恢复"，打破卡死状态
+      } else if (now - lastTickAt >= SEEK_STALL_MS) {
+        // 多次 seek 都无效：重建播放器，走正常对齐流程
+        stallRetries = 0;
+        lastTickAt = now;
+        cancelSeekResume();
+        try {
+          audio.pause();
+          audio.load();
+        } catch {}
+        needAlign = true;
+        initialSeekDone = false;
+        pendingPlay = true;
+        alignWatchUntil = Date.now() + 20000;
+        safePlay();
+      }
+    } else {
+      lastTickMs = audio.currentTime * 1000;
+      lastTickAt = now;
+      stallRetries = 0;
+    }
+  } else {
+    lastTickMs = audio.currentTime * 1000;
+    lastTickAt = now;
+    stallRetries = 0;
   }
 }, 2000);
 
@@ -426,6 +543,7 @@ function playLocally() {
 
 ui.playBtn.addEventListener('click', () => {
   if (state && state.playing) {
+    cancelSeekResume();
     audio.pause();
     sendControl('pause');
   } else {
@@ -484,7 +602,9 @@ ui.seek.addEventListener('input', () => {
 });
 ui.seek.addEventListener('change', () => {
   dragging = false;
-  sendControl('seek', { positionMs: Math.round(Number(ui.seek.value) || 0) });
+  const pos = Math.round(Number(ui.seek.value) || 0);
+  userSeek(pos); // 本地立即跳转，不等服务器回包
+  sendControl('seek', { positionMs: pos });
 });
 
 // ---------- 渲染 ----------
