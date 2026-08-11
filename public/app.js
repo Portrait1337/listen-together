@@ -424,15 +424,32 @@ ui.nextBtn.addEventListener('click', () => sendControl('next'));
 
 // ---------- 播放模式 ----------
 const MODE_LABELS = { order: '顺序', shuffle: '随机', single: '单曲循环' };
+
+// 播放模式符号：用 LaTeX 公式经 KaTeX 预渲染成 HTML（字体已内置，离线可用）
+const MODE_LATEX_HTML = {
+  order:
+    '<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>→</mo></mrow><annotation encoding="application/x-tex">\\rightarrow</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.3669em;"></span><span class="mrel">→</span></span></span></span>',
+  shuffle:
+    '<span class="mode-symbol-cross-wrap">' +
+      '<span class="mode-symbol-cross"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>↗</mo></mrow><annotation encoding="application/x-tex">\\nearrow</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8889em;vertical-align:-0.1944em;"></span><span class="mrel">↗</span></span></span></span></span>' +
+      '<span class="mode-symbol-cross"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>↘</mo></mrow><annotation encoding="application/x-tex">\\searrow</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8889em;vertical-align:-0.1944em;"></span><span class="mrel">↘</span></span></span></span></span>' +
+    '</span>',
+  single:
+    '<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>↺</mo></mrow><annotation encoding="application/x-tex">\\circlearrowleft</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="katex-base"><span class="katex-strut" style="height:0.8558em;vertical-align:-0.1808em;"></span><span class="mrel amsrm">↺</span></span></span></span><span class="mode-symbol-one">1</span>',
+};
+
 function renderMode() {
   const mode = state?.playMode || 'order';
   const label = MODE_LABELS[mode] || '顺序';
   const btn = ui.modeBtn;
   if (!btn) return;
+  const latex = MODE_LATEX_HTML[mode];
+  btn.innerHTML = latex
+    ? '<span class="mode-symbol">' + latex + '</span><span class="mode-label">' + label + '</span>'
+    : label;
   // 微信内置浏览器偶发只改了数据、屏幕上文字不刷新，
   // 所以放到点击事件结束后刷新，并强制重绘一次
   requestAnimationFrame(() => {
-    btn.textContent = label;
     btn.classList.remove('mode-order', 'mode-shuffle', 'mode-single');
     btn.classList.add('mode-' + mode);
     const prev = btn.style.display;
@@ -475,6 +492,8 @@ function renderPlaylist() {
     const name = document.createElement('span');
     name.className = 'track-name';
     name.textContent = t.name;
+    // 正在播放的当前曲目：歌名前加绿色“正在播放”标签
+    const playingBadge = state?.playing && i === state.currentIndex;
     const meta = document.createElement('span');
     meta.className = 'track-meta';
     meta.textContent = t.fromLibrary ? '曲库 · ' + t.uploader : t.uploader;
@@ -488,7 +507,14 @@ function renderPlaylist() {
         send({ type: 'remove_track', trackId: t.id });
       }
     });
-    item.append(idx, play, name, meta, del);
+    if (playingBadge) {
+      const badge = document.createElement('span');
+      badge.className = 'track-playing-badge';
+      badge.textContent = '正在播放';
+      item.append(idx, play, badge, name, meta, del);
+    } else {
+      item.append(idx, play, name, meta, del);
+    }
     ui.playlist.append(item);
   });
   if (ui.queueCount) ui.queueCount.textContent = String(state?.playlist?.length || 0);

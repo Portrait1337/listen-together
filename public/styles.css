@@ -895,6 +895,27 @@ input[type="range"]:focus-visible {
   color: var(--amber-strong);
 }
 
+.track-playing-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(34, 164, 93, 0.14);
+  color: #7fe0a8;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.track-playing-badge::before {
+  content: "●";
+  font-size: 8px;
+  color: #4cd489;
+}
+
 .track-meta {
   flex-shrink: 0;
   color: var(--muted);
@@ -919,13 +940,55 @@ input[type="range"]:focus-visible {
 
 /* 播放模式按钮 */
 .mode-btn {
-  background: rgba(245, 224, 190, 0.07);
-  color: var(--text-soft);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(245, 166, 35, 0.13);
+  color: var(--amber-strong);
+}
+
+.mode-symbol {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+}
+
+.mode-symbol .katex {
+  font-size: 0.92em;
+}
+
+/* 随机播放：两个对角箭头交叉成 X 形 */
+.mode-symbol-cross-wrap {
+  position: relative;
+  display: inline-block;
+  width: 1.15em;
+  height: 1em;
+}
+
+.mode-symbol-cross {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 单曲循环：数字 1 放在环形箭头中心 */
+.mode-symbol-one {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 0.52em;
+  font-weight: 700;
+  line-height: 1;
+  color: inherit;
 }
 
 .mode-btn.mode-shuffle {
-  color: var(--amber-strong);
-  background: rgba(245, 166, 35, 0.13);
+  color: #ffb08a;
+  background: rgba(255, 143, 107, 0.14);
 }
 
 .mode-btn.mode-single {
