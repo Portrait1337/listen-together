@@ -178,6 +178,14 @@ input[type="text"]:focus {
   min-height: 18px;
 }
 
+.landing-tip {
+  margin-top: 14px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .muted {
   color: var(--muted);
   font-size: 13px;
