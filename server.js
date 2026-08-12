@@ -1002,11 +1002,25 @@ wss.on('connection', (ws) => {
         {
           const text = String(msg.text || '').trim().slice(0, 200);
           if (text) {
-            const chat = { nickname, text, time: Date.now() };
+            const chat = { id: crypto.randomBytes(6).toString('hex'), nickname, text, time: Date.now() };
             room.chatHistory.push(chat);
             if (room.chatHistory.length > 100) room.chatHistory.shift();
             broadcast(room, { type: 'chat', ...chat });
           }
+        }
+        break;
+
+      case 'recall_message':
+        if (!room) return;
+        {
+          const id = String(msg.id || '');
+          if (!id) break;
+          const idx = room.chatHistory.findIndex((m) => m.id === id);
+          if (idx < 0) break;
+          // 只有发送者本人能撤回（当前无账号体系，按昵称判定）
+          if (room.chatHistory[idx].nickname !== nickname) break;
+          room.chatHistory.splice(idx, 1);
+          broadcast(room, { type: 'message_recalled', id });
         }
         break;
 

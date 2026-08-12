@@ -147,3 +147,66 @@ test('聊天记录最多保留最近 100 条', async () => {
   assert.equal(history.messages[0].text, '消息6');
   assert.equal(history.messages[99].text, '消息105');
 });
+
+test('发送者可以撤回自己的消息，撤回后从历史移除并广播', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitFor('room_created');
+  await alice.waitFor('state');
+
+  alice.send({ type: 'chat', text: '要撤回的话' });
+  const chat = await alice.waitFor('chat');
+  assert.ok(chat.id, '聊天消息应带唯一 id');
+
+  alice.send({ type: 'recall_message', id: chat.id });
+  const recalled = await alice.waitFor('message_recalled');
+  assert.equal(recalled.id, chat.id);
+
+  // 新成员进房看不到这条已撤回的历史
+  const bob = await connectClient();
+  bob.send({ type: 'join_room', code: created.code, nickname: '小B' });
+  const history = await bob.waitFor('chat_history');
+  assert.ok(!history.messages.some((m) => m.id === chat.id));
+});
+
+test('他人不能撤回别人的消息', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitFor('room_created');
+  await alice.waitFor('state');
+
+  const bob = await connectClient();
+  bob.send({ type: 'join_room', code: created.code, nickname: '小B' });
+  await bob.waitFor('chat_history');
+  await bob.waitFor('state');
+
+  alice.send({ type: 'chat', text: '这是我的消息' });
+  const chat = await alice.waitFor('chat');
+
+  // 小B 尝试撤回小A 的消息：应被忽略
+  bob.send({ type: 'recall_message', id: chat.id });
+
+  // 小C 进房后历史里仍应包含这条消息
+  const carol = await connectClient();
+  carol.send({ type: 'join_room', code: created.code, nickname: '小C' });
+  const history = await carol.waitFor('chat_history');
+  assert.equal(history.messages.length, 1);
+  assert.equal(history.messages[0].id, chat.id);
+});
+
+test('撤回不存在的消息会被忽略，历史不受影响', async () => {
+  const alice = await connectClient();
+  alice.send({ type: 'create_room', name: '一起听', nickname: '小A' });
+  const created = await alice.waitFor('room_created');
+  await alice.waitFor('state');
+
+  alice.send({ type: 'chat', text: '保留这条' });
+  const chat = await alice.waitFor('chat');
+  alice.send({ type: 'recall_message', id: '不存在的id' });
+
+  const bob = await connectClient();
+  bob.send({ type: 'join_room', code: created.code, nickname: '小B' });
+  const history = await bob.waitFor('chat_history');
+  assert.equal(history.messages.length, 1);
+  assert.equal(history.messages[0].id, chat.id);
+});

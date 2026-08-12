@@ -226,11 +226,18 @@ function handleMessage(d) {
       renderMembers();
       break;
     case 'chat':
-      appendChat(d.nickname, d.text);
+      appendChat(d.nickname, d.text, d.id);
       break;
     case 'chat_history':
       ui.chatList.innerHTML = '';
-      (d.messages || []).forEach((m) => appendChat(m.nickname, m.text));
+      (d.messages || []).forEach((m) => appendChat(m.nickname, m.text, m.id));
+      break;
+    case 'message_recalled':
+      // 把被撤回的消息从聊天列表移除
+      {
+        const el = ui.chatList.querySelector('[data-id="' + String(d.id || '') + '"]');
+        if (el) el.remove();
+      }
       break;
     case 'error':
       ui.hint.textContent = d.message || '出错了';
@@ -849,14 +856,50 @@ function renderTime() {
 }
 
 // ---------- 聊天 ----------
-function appendChat(nick, text) {
+function appendChat(nick, text, id) {
   const div = document.createElement('div');
   div.className = 'chat-msg';
+  div.dataset.id = id || '';
+  const own = Boolean(id) && nick === nickname;
+  div.dataset.own = own ? '1' : '0';
   const n = document.createElement('b');
   n.textContent = nick + '：';
   const t = document.createElement('span');
   t.textContent = text;
   div.append(n, t);
+  if (own && id) {
+    let pressTimer = null;
+    const showRecallMenu = () => {
+      if (div.querySelector('.recall-btn')) return;
+      const btn = document.createElement('button');
+      btn.className = 'recall-btn';
+      btn.textContent = '撤回';
+      btn.addEventListener('click', () => {
+        send({ type: 'recall_message', id });
+        const existing = div.querySelector('.recall-btn');
+        if (existing) existing.remove();
+      });
+      div.append(btn);
+    };
+    // 手机：长按约 0.5 秒弹出；滑动/松手取消
+    div.addEventListener(
+      'touchstart',
+      () => {
+        clearTimeout(pressTimer);
+        pressTimer = setTimeout(showRecallMenu, 500);
+      },
+      { passive: true }
+    );
+    ['touchend', 'touchmove', 'touchcancel'].forEach((evt) =>
+      div.addEventListener(evt, () => clearTimeout(pressTimer))
+    );
+    // 电脑：右键直接弹出
+    div.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      clearTimeout(pressTimer);
+      showRecallMenu();
+    });
+  }
   ui.chatList.append(div);
   ui.chatList.scrollTop = ui.chatList.scrollHeight;
 }
@@ -1260,7 +1303,7 @@ ui.createBtn.addEventListener('click', () => {
     ui.nickname.focus();
     return;
   }
-  nickname = nick;
+  nickname = nick.slice(0, 20); // 与服务端 cleanNick 一致，保证“自己的消息”判断正确
   saveNickname(nick);
   creatingRoom = true;
   roomCode = null;
@@ -1279,7 +1322,7 @@ ui.joinBtn.addEventListener('click', () => {
     ui.nickname.focus();
     return;
   }
-  nickname = nick;
+  nickname = nick.slice(0, 20); // 与服务端 cleanNick 一致，保证“自己的消息”判断正确
   saveNickname(nick);
   roomCode = ui.roomCodeInput.value.trim().toUpperCase();
   if (!roomCode) {

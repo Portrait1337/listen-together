@@ -1029,6 +1029,15 @@ input[type="range"]:focus-visible {
   margin-right: 4px;
 }
 
+.chat-msg .recall-btn {
+  background: #4a2226;
+  color: #ff7b72;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  margin-left: 8px;
+}
+
 .chat-input-row {
   display: flex;
   gap: 8px;
