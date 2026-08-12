@@ -74,6 +74,7 @@ const ONLINE_MAX_CONCURRENT_DOWNLOADS = Number(process.env.ONLINE_MAX_CONCURRENT
 const ONLINE_MAX_CONCURRENT_SEARCHES = Number(process.env.ONLINE_MAX_CONCURRENT_SEARCHES) || 5; // 在线搜索并发上限（每次搜索最多发 4 个第三方请求），防出站请求放大
 const ONLINE_FILE_TTL_MS = Number(process.env.ONLINE_FILE_TTL_MS) || 24 * 60 * 60 * 1000; // 在线下载文件无人引用 24 小时后清理（缓存性质，可重新下载）
 const ONLINE_CLEAN_INTERVAL_MS = Number(process.env.ONLINE_CLEAN_INTERVAL_MS) || 60 * 60 * 1000; // 在线下载文件清理间隔
+const COS_CLEAN_INTERVAL_MS = Number(process.env.COS_CLEAN_INTERVAL_MS) || 60 * 60 * 1000; // COS 孤儿对象清理间隔（账单防护）
 
 const app = express();
 // 只信任本机隧道（cpolar/cloudflared 都在本机跑）写入的 X-Forwarded-For：
@@ -350,7 +351,8 @@ app.post('/api/upload', beginUpload, (req, res, next) => {
       console.error('COS 上传失败：', err.message);
       return res.status(500).json({ error: '上传失败，请重试' });
     }
-    // 转存成功：删除手机本地中转文件
+    // 记录 key 供孤儿清理回收；转存成功后删除手机本地中转文件
+    cos.recordKey(key);
     fs.unlink(req.file.path, () => {});
   } else {
     // 未配置 COS：保持原行为，文件留在本地 /uploads
@@ -646,7 +648,22 @@ app.use((err, req, res, next) => {
   res.status(400).json({ error: err.message || '上传失败' });
 });
 
-// ---------- 房间与实时同步 ----------
+// 清理无人引用的 COS 对象：上传转存的云对象若永不回收，房间销毁/删歌后
+// 会永久留在桶里，存储费无限增长（上传限流挡不住多 IP 刷上传的账单炸弹）。
+// 只回收本进程上传过的 key（cos.recordKey 记录），重启后保守不删；
+// 桶级生命周期规则可作为兜底。
+function cleanupOrphanCosFiles() {
+  if (!cos.enabled()) return;
+  const referenced = new Set();
+  for (const room of rooms.values()) {
+    for (const t of room.playlist) {
+      if (typeof t.cosKey === 'string' && t.cosKey) referenced.add(t.cosKey);
+    }
+  }
+  cos.cleanupOrphans(referenced).catch(() => {});
+}
+
+// ---------- WebSocket 实时同步 ----------
 const rooms = new Map();
 const roomTimers = new Map();
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -888,7 +905,9 @@ setInterval(() => {
 
 // 断开宽限：连接断开后不立即从成员列表移除，给同昵称重连留窗口，
 // 避免 iPhone 锁屏/切后台再回来时其他人看到"离开又进来"的闪烁
-const MEMBER_GRACE_MS = Number(process.env.MEMBER_GRACE_MS) || 15000;
+// 注意不能用 `|| 15000`：显式设 0（测试禁用宽限）会被 falsy 吞掉
+const MEMBER_GRACE_MS =
+  process.env.MEMBER_GRACE_MS !== undefined ? Number(process.env.MEMBER_GRACE_MS) : 15000;
 
 wss.on('connection', (ws) => {
   ws.isAlive = true;
@@ -1089,3 +1108,5 @@ setInterval(refreshLibraryIndex, LIBRARY_INDEX_REFRESH_MS).unref();
 setInterval(cleanupOrphanUploads, 6 * 60 * 60 * 1000).unref();
 // 在线下载缓存文件定期清理（缓存性质，可重新下载）
 setInterval(cleanupOrphanOnlineFiles, ONLINE_CLEAN_INTERVAL_MS).unref();
+// COS 孤儿对象定期回收（账单防护）
+setInterval(cleanupOrphanCosFiles, COS_CLEAN_INTERVAL_MS).unref();

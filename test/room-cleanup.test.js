@@ -23,6 +23,8 @@ function startServer() {
         ...process.env,
         PORT: String(PORT),
         UPLOAD_DIR: uploadTmpDir,
+        // 宽限期归零：房间生命周期测试依赖 close 后立即移除成员并销毁房间
+        MEMBER_GRACE_MS: '0',
         EMPTY_ROOM_TTL_MS: '150',
         ACTIVE_ROOM_TTL_MS: '600',
       },

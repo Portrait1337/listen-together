@@ -49,6 +49,33 @@ async function main() {
   await cos.deleteObject('uploads/abc123.mp3');
   assert.strictEqual(calls[1].Key, 'uploads/abc123.mp3');
 
+  // cleanupOrphans：被引用的保留、无引用的删除；删除失败的对象下轮重试
+  cos.recordKey('uploads/keep.mp3');
+  cos.recordKey('uploads/doomed.mp3');
+  cos.recordKey('uploads/fail.mp3');
+  const delCalls = [];
+  let failAttempts = 0;
+  cos._setClientForTest({
+    putObject: (p, cb) => cb(null, {}),
+    deleteObject: (params, cb) => {
+      delCalls.push(params.Key);
+      // fail.mp3 第一次删除失败（网络错误），第二次成功：验证失败对象保留并重试
+      if (params.Key === 'uploads/fail.mp3') {
+        failAttempts += 1;
+        return cb(failAttempts === 1 ? new Error('网络错误') : null, {});
+      }
+      cb(null, {});
+    },
+  });
+  const removed = await cos.cleanupOrphans(new Set(['uploads/keep.mp3']));
+  assert.strictEqual(removed, 1, '本轮应删除 1 个（doomed 成功，fail 网络错误待重试）');
+  assert.deepStrictEqual(delCalls.sort(), ['uploads/doomed.mp3', 'uploads/fail.mp3'].sort());
+  // 删除失败的对象保留在集合：下轮清理重试
+  delCalls.length = 0;
+  const removed2 = await cos.cleanupOrphans(new Set(['uploads/keep.mp3']));
+  assert.strictEqual(removed2, 1, '失败对象下轮重试删除');
+  assert.deepStrictEqual(delCalls, ['uploads/fail.mp3']);
+
   cos._setClientForTest(null);
   console.log('PASS：cos.js 单元测试通过');
 }

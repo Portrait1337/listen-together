@@ -61,6 +61,34 @@ async function deleteObject(key) {
   });
 }
 
+// 本进程上传过的对象 key：清理时只回收这些，重启后集合为空则保守不删，
+// 避免误删其他实例或手动上传的对象（桶级生命周期规则可作兜底）
+const uploadedKeys = new Set();
+
+function recordKey(key) {
+  uploadedKeys.add(key);
+}
+
+// 清理无人引用的对象：referenced 是当前仍被房间歌单引用的 key 集合。
+// 删除失败的对象保留在集合里，下轮重试；返回本轮实际删除数量。
+async function cleanupOrphans(referenced) {
+  const doomed = [];
+  for (const key of uploadedKeys) {
+    if (!referenced.has(key)) doomed.push(key);
+  }
+  let removed = 0;
+  for (const key of doomed) {
+    try {
+      await deleteObject(key);
+      uploadedKeys.delete(key);
+      removed += 1;
+    } catch {
+      // 删除失败（网络等）：保留 key，下轮清理重试
+    }
+  }
+  return removed;
+}
+
 function _setConfigFile(p) {
   configFile = p;
 }
@@ -70,4 +98,4 @@ function _setClientForTest(c) {
   client = null;
 }
 
-module.exports = { enabled, uploadFile, deleteObject, _setConfigFile, _setClientForTest };
+module.exports = { enabled, uploadFile, deleteObject, recordKey, cleanupOrphans, _setConfigFile, _setClientForTest };

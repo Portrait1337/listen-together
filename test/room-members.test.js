@@ -155,6 +155,9 @@ async function main() {
     await open(o);
     o.sent({ type: 'join_room', code, nickname: '观察员' });
     await o.wait((m) => m.type === 'members');
+    // 观察员自己加入时的 member_joined 广播可能晚于 members 送达：
+    // 先消费掉，避免被误判成"重连闪烁"
+    await o.wait((m) => m.type === 'member_joined' && m.nickname === '观察员', 2000).catch(() => {});
     o.inbox.length = 0; // 清空基线消息，只统计后续的离开/加入闪烁
 
     a.ws.close(); // 模拟断线（不主动 leave）
@@ -187,7 +190,8 @@ async function main() {
     await act.wait((m) => m.type === 'members');
     act.sent({ type: 'leave' });
     act.ws.close();
-    const leftMsg = await obs.wait((m) => m.type === 'member_left', 3000);
+    // 精确匹配小红的离开广播（房间内其他成员退出也会广播 member_left，避免误匹配）
+    const leftMsg = await obs.wait((m) => m.type === 'member_left' && m.nickname === '小红', 3000);
     const ok = (leftMsg.members || []).every((x) => x.nickname !== '小红');
     if (!ok) {
       console.error('FAIL：leave 后小红仍在成员列表');
