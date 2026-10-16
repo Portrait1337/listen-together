@@ -1,7 +1,7 @@
 /* ============================================================
-   一起听 · 深夜黑胶电台
-   设计方向：温暖 / 克制 / 有仪式感
-   签名元素：旋转黑胶唱片，播放时匀速转动
+   一起听 · 共听唱片室
+   设计方向：奶油白纸张 / 深蓝唱片封套 / 珊瑚红操作点缀
+   签名元素：唱片从首页延续到播放器，播放时旋转
    ============================================================ */
 
 :root {
@@ -598,6 +598,40 @@ input[type="text"]:focus {
   overflow: hidden;
 }
 
+/* 超长歌名：单行无缝滚动 */
+.now-title.marquee {
+  display: block;
+  -webkit-line-clamp: unset;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.now-title.marquee .marquee-track {
+  display: inline-flex;
+  white-space: nowrap;
+  will-change: transform;
+  animation: marquee-scroll var(--marquee-duration, 12s) linear infinite;
+}
+
+.now-title.marquee .marquee-text {
+  display: inline-block;
+  padding-right: 2.5em;
+}
+
+.now-title.marquee:hover .marquee-track,
+.now-title.marquee:active .marquee-track {
+  animation-play-state: paused;
+}
+
+@keyframes marquee-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
@@ -779,6 +813,29 @@ input[type="range"]:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 搜索歌名：点击后单行无缝滚动 */
+.lib-name.marquee {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+.lib-name.marquee .marquee-track {
+  display: inline-flex;
+  white-space: nowrap;
+  will-change: transform;
+  animation: marquee-scroll var(--marquee-duration, 12s) linear infinite;
+}
+
+.lib-name.marquee .marquee-text {
+  display: inline-block;
+  padding-right: 2.5em;
+}
+
+.lib-name.marquee:active .marquee-track {
+  animation-play-state: paused;
 }
 
 .lib-badge {
@@ -1145,4 +1202,317 @@ input[type="range"]:focus-visible {
   .hero-disc .disc-grooves {
     animation: none;
   }
+}
+
+/* ---------- 2026 共听唱片室：轻纸张、深蓝唱片封套 ---------- */
+:root {
+  --bg: #f7f4ed;
+  --bg-deep: #102b3b;
+  --surface: #fffdf9;
+  --surface-2: #f0ebe1;
+  --surface-3: #e9e4d9;
+  --line: rgba(20, 50, 64, 0.12);
+  --line-strong: rgba(20, 50, 64, 0.22);
+  --text: #173345;
+  --text-soft: #405663;
+  --muted: #687b85;
+  --amber: #e75e49;
+  --amber-strong: #ed7056;
+  --amber-ink: #fffaf3;
+  --danger: #bc4d42;
+  --radius: 24px;
+  --radius-sm: 12px;
+  --shadow-card: 0 18px 42px rgba(29, 55, 65, 0.06);
+}
+
+body {
+  background: radial-gradient(circle at 9% 12%, rgba(240, 198, 151, 0.19), transparent 30%),
+    radial-gradient(circle at 94% 82%, rgba(157, 192, 194, 0.16), transparent 32%),
+    #f7f4ed;
+  background-attachment: fixed;
+}
+
+::selection { background: #f3b8a7; color: #173345; }
+
+button { border-radius: 12px; }
+button:hover { filter: none; background-color: #dcd5c9; }
+button.primary, .send-btn {
+  background: var(--amber);
+  color: #fffaf3;
+  box-shadow: 0 8px 20px rgba(231, 94, 73, 0.17);
+}
+button.primary:hover, .send-btn:hover { background: #d9513e; box-shadow: 0 11px 22px rgba(231, 94, 73, 0.22); }
+button.secondary { background: #fffdf9; color: var(--text); border-color: var(--line-strong); }
+button.secondary:hover { background: #f0ebe1; }
+#joinBtn.ready { background: var(--text); color: #fffdf9; border-color: var(--text); animation: none; }
+#joinBtn.ready:hover { background: #24485b; }
+button.danger { background: #f9e9e5; }
+button.danger:hover { background: #f2d8d2; }
+button:focus-visible, input:focus-visible { outline-color: var(--amber); }
+
+input[type="text"] { background: #fffefa; border-color: #d6d7d2; color: var(--text); }
+input[type="text"]:focus { border-color: var(--amber); box-shadow: 0 0 0 4px rgba(231, 94, 73, 0.12); }
+input[type="text"]::placeholder { color: #87939a; }
+.hint { color: var(--danger); }
+.card { background: var(--surface); box-shadow: var(--shadow-card); border-color: var(--line); }
+.head-title { font-size: 19px; letter-spacing: -0.02em; }
+.head-title .count { color: var(--amber); background: #fbece7; border-radius: 7px; }
+
+.brand-mark {
+  display: block;
+  width: 44px;
+  height: 44px;
+  flex: none;
+}
+
+/* 首页采用唱片封套式的左右排版。 */
+.screen-landing {
+  max-width: 1170px;
+  min-height: 100svh;
+  padding: 36px 42px 32px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.8fr);
+  grid-template-areas: "top top" "hero form" "features features";
+  align-content: center;
+  align-items: center;
+  column-gap: clamp(48px, 9vw, 132px);
+  row-gap: 30px;
+}
+.landing-topline {
+  grid-area: top;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 0 18px;
+  border-bottom: 1px solid var(--line-strong);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+.hero { grid-area: hero; text-align: left; position: relative; }
+.eyebrow {
+  color: var(--amber);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.32em;
+  margin-bottom: 14px;
+}
+.hero-disc { width: 192px; height: 192px; margin: 0 0 34px 18px; background: #132e3e; filter: drop-shadow(18px 20px 12px rgba(25, 50, 59, 0.18)); }
+.hero-disc::before { inset: -12px; border: 1px solid rgba(231, 94, 73, 0.4); background: none; }
+.hero-disc .disc-grooves { background: repeating-radial-gradient(circle, #183747 0 2px, #0c2635 2px 4px); }
+.hero-disc .disc-label { background: #e9684f; color: #fff8eb; box-shadow: none; }
+.hero-disc .disc-hole { background: #fff8eb; box-shadow: none; width: 8px; height: 8px; }
+.brand {
+  color: var(--text);
+  font-family: Georgia, "Songti SC", "STSong", serif;
+  font-size: clamp(50px, 6vw, 84px);
+  font-weight: 800;
+  letter-spacing: -0.08em;
+  line-height: 1.1;
+  margin-left: 0;
+  text-shadow: none;
+}
+.sub { max-width: 420px; color: var(--text-soft); font-size: 17px; line-height: 1.8; margin: 20px 0 0; }
+.landing-card {
+  grid-area: form;
+  margin: 0;
+  padding: clamp(24px, 4vw, 42px);
+  background: #fffdf9;
+  border: 1px solid #e4e1d9;
+  box-shadow: 0 22px 55px rgba(27, 51, 63, 0.09);
+}
+.landing-card::before {
+  content: "先打个招呼";
+  display: block;
+  margin-bottom: 26px;
+  font-family: Georgia, "Songti SC", "STSong", serif;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+.field + .field { margin-top: 20px; }
+.field-label { color: var(--text-soft); margin-bottom: 9px; font-size: 13px; }
+.landing-card input { min-height: 52px; }
+.landing-card .row { margin-top: 24px; }
+.landing-card .row button { min-height: 50px; }
+.landing-tip { text-align: left; font-size: 12px; margin-top: 20px; }
+.features {
+  grid-area: features;
+  justify-content: flex-start;
+  gap: 12px 28px;
+  border-top: 1px solid var(--line);
+  padding-top: 24px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+.feat-dot { width: 25px; height: 25px; background: #e6ebe7; color: var(--text); }
+
+/* 房间页为播放器、歌单、聊天构成的共听工作区。 */
+.screen-room {
+  max-width: 1240px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
+  grid-template-areas: "head head" "members members" "player chat" "queue chat";
+  column-gap: 22px;
+  align-content: start;
+  padding: 30px 32px 64px;
+}
+.room-head { grid-area: head; display: grid; grid-template-columns: 1fr auto auto; gap: 32px; border-bottom: 1px solid var(--line-strong); padding-bottom: 20px; margin-bottom: 0; }
+.room-brand { display: flex; align-items: center; gap: 15px; font-family: Georgia, "Songti SC", "STSong", serif; font-weight: 700; font-size: 23px; white-space: nowrap; }
+.room-brand .brand-mark { width: 47px; height: 47px; }
+.room-brand small { display: block; margin-top: 2px; color: var(--muted); font: 700 9px/1.3 -apple-system, BlinkMacSystemFont, sans-serif; letter-spacing: 0.18em; }
+.room-id { display: flex; align-items: center; gap: 15px; }
+.room-label { margin: 0; color: var(--muted); font-size: 10px; letter-spacing: 0.13em; }
+.room-code { color: var(--text); text-shadow: none; font-size: 27px; }
+.room-code-row { gap: 12px; }
+#copyBtn { color: var(--text); background: #e6ebe7; }
+#leaveBtn { background: transparent; border: 1px solid var(--line-strong); color: var(--text-soft); }
+.room-subhead { grid-area: members; min-height: 70px; padding: 12px 0; gap: 16px; }
+.listening { color: var(--text-soft); font-size: 13px; font-weight: 600; }
+.listening b { color: var(--amber); }
+.member { background: #e8eeeb; color: var(--text); border-color: transparent; font-weight: 600; }
+.member::before { color: hsl(var(--hue, 36) 65% 46%); }
+
+.player-card {
+  grid-area: player;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  min-height: 334px;
+  margin-top: 0;
+  padding: 26px 30px 22px;
+  background: #173a4c;
+  border: 1px solid #173a4c;
+  color: #fffaf3;
+  box-shadow: 0 24px 44px rgba(22, 57, 74, 0.17);
+}
+.player-card::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  width: 410px;
+  height: 410px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
+  right: -160px;
+  top: -154px;
+  box-shadow: 0 0 0 44px rgba(255, 255, 255, 0.025), 0 0 0 88px rgba(255, 255, 255, 0.018);
+  pointer-events: none;
+}
+.player-kicker { display: flex; align-items: center; gap: 8px; color: #cbdbdc; font-size: 11px; font-weight: 800; letter-spacing: 0.13em; margin-bottom: 24px; }
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: #ef846d; box-shadow: 0 0 0 4px rgba(239, 132, 109, 0.16); }
+.player-kicker-line { height: 1px; width: 25px; background: rgba(255, 255, 255, 0.28); margin: 0 4px; }
+.now-playing { gap: 22px; margin-bottom: 28px; }
+.disc-mini { width: 118px; height: 118px; background: #0c2230; box-shadow: 0 12px 25px rgba(0, 0, 0, 0.28); }
+.disc-mini .disc-grooves { background: repeating-radial-gradient(circle, #183747 0 2px, #0c2635 2px 4px); }
+.disc-mini .disc-label { width: 49px; height: 49px; background: var(--amber); color: #fffaf3; box-shadow: none; }
+.disc-mini .disc-hole { background: #fffaf3; box-shadow: none; width: 7px; height: 7px; }
+.now-title { font-family: Georgia, "Songti SC", "STSong", serif; font-size: clamp(22px, 2.2vw, 31px); font-weight: 700; line-height: 1.28; }
+.player-card .muted { color: #adc3c9; font-size: 12px; margin-top: 12px; }
+.player-card input[type="range"] { height: 5px; background: linear-gradient(to right, #ee8069 0%, #ee8069 var(--seek-pct, 0%), rgba(255, 255, 255, 0.27) var(--seek-pct, 0%), rgba(255, 255, 255, 0.27) 100%); }
+.player-card input[type="range"]::-webkit-slider-thumb { background: #fffaf3; box-shadow: 0 0 0 4px rgba(238, 128, 105, 0.22); }
+.player-card input[type="range"]::-moz-range-thumb { background: #fffaf3; box-shadow: 0 0 0 4px rgba(238, 128, 105, 0.22); }
+.time-row { color: #b7cbd0; }
+.controls { margin-top: 13px; gap: 22px; }
+.control { width: 42px; height: 42px; background: rgba(255, 255, 255, 0.1); color: #fffaf3; box-shadow: none; }
+.control:hover { background: rgba(255, 255, 255, 0.2); }
+.control.play { width: 59px; height: 59px; background: #ef8068; color: #fffaf3; box-shadow: 0 9px 20px rgba(12, 34, 48, 0.27); }
+.control.play:hover { background: #fa947b; }
+
+.queue-card { grid-area: queue; padding: 23px 26px; }
+.queue-card .card-head { margin-bottom: 18px; }
+.head-btns { gap: 7px; }
+.head-btns .small { white-space: nowrap; }
+#uploadBtn { background: #e75e49; color: #fffaf3; }
+#uploadBtn:hover { background: #d9513e; }
+.mode-btn { color: var(--text); background: #e8eeeb; }
+.mode-btn.mode-shuffle { color: #9a5040; background: #f7e4df; }
+.mode-btn.mode-single { color: #1a7457; background: #ddefe5; }
+.search-tabs { border-bottom: 1px solid var(--line); gap: 20px; margin-bottom: 16px; }
+.search-tabs .tab { flex: 0 0 auto; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 9px 3px 11px; background: transparent; color: var(--muted); }
+.search-tabs .tab.active { color: var(--text); border-color: var(--amber); background: transparent; }
+.platform-tabs { gap: 7px; }
+.platform-tabs .tab { flex: 0 0 auto; padding: 7px 14px; border-radius: 999px; background: #f1f2ed; color: var(--text-soft); font-size: 12px; }
+.platform-tabs .tab.active { background: #dce8e5; border-color: transparent; color: var(--text); }
+.search-row input { background: #f7f8f5; border-color: #e0e4df; }
+.library-results { background: #f7f8f5; border-color: #e1e7e2; max-height: 250px; }
+.lib-row:hover, .track:hover { background: #ecf1ed; }
+.lib-row button { background: #e3ebe7; color: var(--text); }
+.lib-badge { border-radius: 5px; }
+.load-more { background: #e9eeea; color: var(--text); }
+.playlist { max-height: 300px; }
+.playlist:empty::after { content: "歌单还是空的，搜索或上传一首喜欢的歌。"; display: block; padding: 24px 10px; color: var(--muted); font-size: 13px; text-align: center; border: 1px dashed var(--line-strong); border-radius: 12px; }
+.track { border-bottom: 1px solid #eff0eb; border-radius: 0; }
+.track.active { background: #f5ebe6; box-shadow: inset 3px 0 0 var(--amber); border-radius: 8px; }
+.track.active .track-index, .track.active .track-name { color: var(--text); }
+.track .track-play { color: var(--amber); }
+.track.active .track-play svg { fill: var(--amber); }
+.track-playing-badge { background: #e3eee7; color: #327254; }
+.track-playing-badge::before { color: #4ca16a; }
+.track .track-del:hover { background: #fae9e5; }
+
+.chat-card { grid-area: chat; display: flex; flex-direction: column; min-height: 0; padding: 23px 24px 20px; background: #e8eee9; border-color: #dce6df; }
+.chat-card .card-head { align-items: baseline; }
+.chat-head-note { color: var(--muted); font-size: 11px; }
+.chat-list { flex: 1; min-height: 350px; height: auto; background: #f7faf6; border-color: #dce6df; padding: 16px; }
+.chat-list:empty::after { content: "还没有人说话。发条消息，开启这一刻的对话。"; display: block; padding: 22px 10px; color: var(--muted); font-size: 13px; line-height: 1.7; text-align: center; }
+.chat-msg { margin-bottom: 9px; }
+.chat-msg b { color: var(--text); }
+.chat-msg .recall-btn { background: #f8dfdb; color: var(--danger); }
+.chat-input-row input { background: #fffefa; }
+
+#unlock { background: rgba(17, 43, 56, 0.75); }
+#unlock .box { background: #fffdf9; border-color: #fffdf9; box-shadow: 0 30px 70px rgba(7, 29, 39, 0.28); }
+.big-icon { background: var(--amber); color: #fffaf3; box-shadow: none; }
+
+@media (max-width: 900px) {
+  .screen-landing { max-width: 680px; min-height: auto; grid-template-columns: 1fr; grid-template-areas: "top" "hero" "form" "features"; row-gap: 28px; padding: 28px 24px 56px; }
+  .hero-disc { width: 156px; height: 156px; margin-bottom: 26px; }
+  .brand { font-size: 58px; }
+  .sub { margin-top: 12px; }
+  .screen-room { display: block; max-width: 680px; padding: 26px 24px 60px; }
+  .room-head { display: flex; flex-wrap: wrap; gap: 16px; }
+  .room-brand { width: 100%; }
+  .room-id { gap: 10px; }
+  .player-card { margin-top: 0; }
+  .chat-card { min-height: 0; }
+  .chat-list { height: 260px; min-height: 260px; flex: initial; }
+}
+
+@media (max-width: 520px) {
+  .screen-landing { padding: 22px 18px 48px; row-gap: 24px; }
+  .landing-topline { gap: 15px; font-size: 10px; letter-spacing: 0.08em; }
+  .hero-disc { width: 126px; height: 126px; margin: 0 0 22px 12px; }
+  .hero-disc .disc-label { width: 54px; height: 54px; font-size: 13px; }
+  .eyebrow { margin-bottom: 8px; font-size: 11px; }
+  .brand { font-size: 50px; }
+  .sub { font-size: 15px; line-height: 1.6; }
+  .landing-card { padding: 23px 20px; }
+  .landing-card::before { font-size: 23px; margin-bottom: 20px; }
+  .features { gap: 13px; padding-top: 18px; }
+  .features li { width: 100%; }
+  .screen-room { padding: 20px 14px 45px; }
+  .room-head { align-items: center; gap: 12px; }
+  .room-brand { font-size: 20px; }
+  .room-id { flex: 1; display: block; }
+  .room-label { margin-bottom: 4px; }
+  .room-code { font-size: 23px; }
+  .room-code-row { gap: 7px; }
+  #copyBtn { padding: 6px 9px; }
+  .room-subhead { min-height: 60px; }
+  .player-card { min-height: 0; padding: 21px 18px 17px; }
+  .player-kicker { margin-bottom: 18px; }
+  .now-playing { gap: 15px; margin-bottom: 22px; }
+  .disc-mini { width: 84px; height: 84px; }
+  .disc-mini .disc-label { width: 36px; height: 36px; }
+  .now-title { font-size: 21px; }
+  .controls { margin-top: 10px; }
+  .queue-card, .chat-card { padding: 20px 17px; }
+  .head-title { font-size: 17px; }
+  .head-btns .small { padding: 7px 9px; font-size: 11px; }
+  .chat-head-note { display: none; }
+  .track-meta { max-width: 65px; }
+  .track-playing-badge { display: none; }
 }

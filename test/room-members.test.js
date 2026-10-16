@@ -2,7 +2,7 @@
 // 1. 同一昵称（含微信重连场景）在房间成员列表中只能出现一次
 // 2. 心跳能清理不响应（微信切后台/网络切换）的死连接，残留成员会被移除
 // 用法：node test/room-members.test.js            （本地起测试服务器）
-//      WS_URL=ws://192.168.1.3:3000/ws node test/room-members.test.js （测远端）
+//      WS_URL=ws://192.0.2.10:3000/ws node test/room-members.test.js （测远端）
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');

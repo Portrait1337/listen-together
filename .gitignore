@@ -3,6 +3,10 @@ uploads/
 library/
 online-cache/
 netease-cookie.txt
+cookie-*.txt
 cos-config.json
+ddns.conf
+cpolar.conf
+.private/
 .DS_Store
 npm-debug.log*

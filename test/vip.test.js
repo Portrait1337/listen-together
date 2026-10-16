@@ -22,6 +22,8 @@ let stub = null;
 let plainServer = null; // 无 Cookie
 let vipServer = null; // 有效 Cookie
 let badServer = null; // 无效 Cookie
+let fileServer = null; // 通过 Cookie 文件配置，用于测试文件更新自动刷新
+const fileCookiePath = path.join(tmpBase, 'cookie-file.txt');
 const clients = [];
 
 // ---------- 桩服务：模拟网易云登录态与播放接口 ----------
@@ -133,6 +135,7 @@ function startServer(port, libDir, extraEnv = {}) {
       output += chunk.toString();
       if (output.includes('已启动')) {
         cleanup();
+        child.listenPort = port;
         resolve(child);
       }
     };
@@ -235,6 +238,11 @@ before(async () => {
   badServer = await startServer(BAD_PORT, path.join(tmpBase, 'lib-bad'), {
     NETEASE_COOKIE: 'BAD_COOKIE=xyz',
   });
+  fileServer = await startServer(20000 + crypto.randomInt(0, 30000), path.join(tmpBase, 'lib-file'), {
+    NETEASE_COOKIE: '',
+    NETEASE_COOKIE_FILE: fileCookiePath,
+    NETEASE_VIP_REFRESH_MS: '200',
+  });
 });
 
 after(() => {
@@ -242,6 +250,7 @@ after(() => {
   if (plainServer) plainServer.kill();
   if (vipServer) vipServer.kill();
   if (badServer) badServer.kill();
+  if (fileServer) fileServer.kill();
   if (stub) stub.server.close();
   fs.rmSync(tmpBase, { recursive: true, force: true });
 });
@@ -318,4 +327,30 @@ test('有效 Cookie 不影响免费歌下载落盘', async () => {
   assert.equal(status, 200);
   assert.ok(fs.existsSync(path.join(tmpBase, `online-${VIP_PORT}`, 'netease-111.mp3')));
   await room.client.close();
+});
+
+test('Cookie 文件更新后 30 秒内自动刷新登录状态', async () => {
+  // 初始：文件为空，vipEnabled 应为 false
+  let data = null;
+  for (let i = 0; i < 20; i += 1) {
+    const res = await fetch(`http://127.0.0.1:${fileServer.listenPort}/api/online/search?q=会员`);
+    data = await res.json();
+    if (data.vipEnabled === false) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.equal(data.vipEnabled, false);
+
+  // 写入有效 Cookie 后，轮询等待服务自动刷新为 true
+  fs.writeFileSync(fileCookiePath, 'VALID_COOKIE=abc');
+  let ok = false;
+  for (let i = 0; i < 30; i += 1) {
+    const res = await fetch(`http://127.0.0.1:${fileServer.listenPort}/api/online/search?q=会员`);
+    data = await res.json();
+    if (data.vipEnabled === true) {
+      ok = true;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.equal(ok, true);
 });

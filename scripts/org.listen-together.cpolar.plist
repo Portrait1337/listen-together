@@ -3,12 +3,17 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.peng.cpolar-listen-together</string>
+	<string>org.listen-together.cpolar</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/zsh</string>
-		<string>/Users/peng/.cpolar/bin/cpolar-tunnel.sh</string>
+		<string>__HOME__/.cpolar/bin/cpolar-tunnel.sh</string>
 	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>LISTEN_TOGETHER_CONFIG_DIR</key>
+		<string>__CONFIG_DIR__</string>
+	</dict>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
@@ -16,8 +21,8 @@
 	<key>ProcessType</key>
 	<string>Background</string>
 	<key>StandardOutPath</key>
-	<string>/Users/peng/.cpolar/logs/launchd.log</string>
+	<string>__HOME__/.cpolar/logs/launchd.log</string>
 	<key>StandardErrorPath</key>
-	<string>/Users/peng/.cpolar/logs/launchd-error.log</string>
+	<string>__HOME__/.cpolar/logs/launchd-error.log</string>
 </dict>
 </plist>

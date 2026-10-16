@@ -1,9 +1,9 @@
 // cos.js - 腾讯云 COS 上传封装（未配置时 enabled()=false，服务端自动回退本地存储）
-const path = require('path');
 const fs = require('fs');
 const COS = require('cos-nodejs-sdk-v5');
+const { resolveConfigFile } = require('./config-paths');
 
-let configFile = process.env.COS_CONFIG_FILE || path.join(__dirname, 'cos-config.json');
+let configFile = process.env.COS_CONFIG_FILE;
 let testClient = null;
 let client = null;
 let bucket = '';
@@ -12,7 +12,7 @@ let baseUrl = '';
 
 function loadConfig() {
   try {
-    return JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    return JSON.parse(fs.readFileSync(resolveConfigFile('cos-config.json', configFile), 'utf8'));
   } catch {
     return null;
   }

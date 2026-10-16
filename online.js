@@ -4,11 +4,13 @@ const fs = require('fs');
 const path = require('path');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
+const { resolveConfigFile } = require('./config-paths');
 
 const NETEASE_BASE = process.env.NETEASE_BASE || 'https://music.163.com';
 const MIGU_BASE = process.env.MIGU_BASE || 'https://app.pd.nf.migu.cn';
-const NETEASE_COOKIE_FILE =
-  process.env.NETEASE_COOKIE_FILE || path.join(__dirname, 'netease-cookie.txt');
+function neteaseCookieFile() {
+  return resolveConfigFile('netease-cookie.txt', process.env.NETEASE_COOKIE_FILE);
+}
 const DOWNLOAD_TIMEOUT_MS = Number(process.env.ONLINE_DOWNLOAD_TIMEOUT_MS) || 30000;
 const MAX_SIZE = Number(process.env.ONLINE_MAX_SIZE) || 50 * 1024 * 1024;
 const UA =
@@ -54,21 +56,37 @@ async function httpJson(url, fetchImpl, extraHeaders = {}) {
 }
 
 // ---------- 网易云会员 Cookie ----------
-let neteaseCookieCache = { value: undefined, at: 0 };
+let neteaseCookieCache = { version: undefined, value: undefined, at: 0 };
 
 // 优先取环境变量 NETEASE_COOKIE；否则读 netease-cookie.txt（30 秒缓存，改文件即生效）
 function getNeteaseCookie() {
   if (process.env.NETEASE_COOKIE) return process.env.NETEASE_COOKIE.trim() || null;
   const now = Date.now();
-  if (neteaseCookieCache.value !== undefined && now - neteaseCookieCache.at < 30000) {
+  const version = getNeteaseCookieVersion();
+  if (
+    neteaseCookieCache.value !== undefined &&
+    neteaseCookieCache.version === version &&
+    now - neteaseCookieCache.at < 30000
+  ) {
     return neteaseCookieCache.value;
   }
   let value = null;
   try {
-    value = fs.readFileSync(NETEASE_COOKIE_FILE, 'utf8').trim() || null;
+    value = fs.readFileSync(neteaseCookieFile(), 'utf8').trim() || null;
   } catch {}
-  neteaseCookieCache = { value, at: now };
+  neteaseCookieCache = { version, value, at: now };
   return value;
+}
+
+// Cookie 配置的版本标识：环境变量用长度，文件用 mtime，便于服务端感知"是否变了"
+function getNeteaseCookieVersion() {
+  if (process.env.NETEASE_COOKIE) return 'env:' + process.env.NETEASE_COOKIE.length;
+  try {
+    const file = neteaseCookieFile();
+    return 'file:' + file + ':' + fs.statSync(file).mtimeMs;
+  } catch {
+    return 'file:none';
+  }
 }
 
 // 校验会员登录态：调账号接口，有 profile 才算有效
@@ -342,4 +360,5 @@ module.exports = {
   isAllowedAudioHost,
   checkNeteaseLogin,
   resolveNeteaseVipUrl,
+  getNeteaseCookieVersion,
 };

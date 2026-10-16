@@ -812,6 +812,116 @@ function renderNowPlaying() {
       ui.vinylLabel.textContent = track ? track.name.trim().charAt(0) || '♪' : '♪';
     }
   }
+  refreshNowPlayingMarquee();
+}
+
+// ---------- 正在播放歌名：超长时无缝滚动 ----------
+let marqueeResizeTimer = null;
+
+// 用探针元素按单行测量文本真实宽度：
+// 标题是多行截断（-webkit-line-clamp），直接用 scrollWidth 测不出溢出
+function textOverflows(el) {
+  const style = getComputedStyle(el);
+  const probe = document.createElement('span');
+  probe.style.cssText =
+    'position:absolute;visibility:hidden;white-space:nowrap;left:-9999px;top:0;pointer-events:none;' +
+    'font-family:' + style.fontFamily + ';' +
+    'font-size:' + style.fontSize + ';' +
+    'font-weight:' + style.fontWeight + ';' +
+    'font-style:' + style.fontStyle + ';' +
+    'letter-spacing:' + style.letterSpacing + ';';
+  probe.textContent = el.textContent;
+  document.body.appendChild(probe);
+  const width = probe.scrollWidth;
+  probe.remove();
+  return width > el.clientWidth + 1;
+}
+
+function refreshNowPlayingMarquee() {
+  const el = ui.nowPlaying;
+  if (!el) return;
+  // 文本可能正存在于滚动结构里（aria-label 或 .marquee-track）：
+  // 必须先取出再清理，否则标题会被清空
+  const oldTrack = el.querySelector('.marquee-track');
+  const text = (
+    el.getAttribute('aria-label') ||
+    (oldTrack && oldTrack.firstElementChild ? oldTrack.firstElementChild.textContent : '') ||
+    el.textContent ||
+    ''
+  ).trim();
+  // 先恢复纯文本，保证任何提前返回都不会留下空标题
+  el.classList.remove('marquee');
+  el.removeAttribute('aria-label');
+  if (oldTrack) oldTrack.remove();
+  el.textContent = text;
+  if (!text) return;
+  // 系统开启“减少动态效果”时不滚动，保持两行截断
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  // 只在真实溢出时滚动
+  if (!textOverflows(el)) return;
+  el.classList.add('marquee');
+  el.setAttribute('aria-label', text);
+  const track = document.createElement('span');
+  track.className = 'marquee-track';
+  track.setAttribute('aria-hidden', 'true');
+  for (let i = 0; i < 2; i++) {
+    const copy = document.createElement('span');
+    copy.className = 'marquee-text';
+    copy.textContent = text;
+    track.append(copy);
+  }
+  el.textContent = '';
+  el.append(track);
+  // 时长随文本宽度自适应：文本越宽滚得越慢
+  const oneCopyWidth = track.firstElementChild ? track.firstElementChild.scrollWidth : el.clientWidth;
+  const duration = Math.max(10, Math.round(10 + oneCopyWidth / 60));
+  el.style.setProperty('--marquee-duration', duration + 's');
+}
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('resize', () => {
+    clearTimeout(marqueeResizeTimer);
+    marqueeResizeTimer = setTimeout(refreshNowPlayingMarquee, 150);
+  });
+}
+
+// 搜索结果歌名：点击切换无缝滚动（点一次滚，再点停止）
+function toggleLibNameMarquee(el) {
+  if (!el) return;
+  if (el.classList.contains('marquee')) {
+    // 停止：先取回文本再清理，避免标题丢失
+    const oldTrack = el.querySelector('.marquee-track');
+    const text =
+      el.getAttribute('aria-label') ||
+      (oldTrack && oldTrack.firstElementChild ? oldTrack.firstElementChild.textContent : '') ||
+      el.textContent ||
+      '';
+    el.classList.remove('marquee');
+    el.removeAttribute('aria-label');
+    if (oldTrack) oldTrack.remove();
+    el.textContent = text;
+    return;
+  }
+  // 减少动态效果时不滚动
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const text = el.textContent.trim();
+  if (!text || !textOverflows(el)) return;
+  el.classList.add('marquee');
+  el.setAttribute('aria-label', text);
+  const track = document.createElement('span');
+  track.className = 'marquee-track';
+  track.setAttribute('aria-hidden', 'true');
+  for (let i = 0; i < 2; i++) {
+    const copy = document.createElement('span');
+    copy.className = 'marquee-text';
+    copy.textContent = text;
+    track.append(copy);
+  }
+  el.textContent = '';
+  el.append(track);
+  const oneCopyWidth = track.firstElementChild ? track.firstElementChild.scrollWidth : el.clientWidth;
+  const duration = Math.max(10, Math.round(10 + oneCopyWidth / 60));
+  el.style.setProperty('--marquee-duration', duration + 's');
 }
 
 function renderMembers() {
@@ -1046,6 +1156,7 @@ function renderLibraryResults(results, total) {
     name.className = 'lib-name';
     name.textContent = t.name;
     name.title = t.name;
+    name.addEventListener('click', () => toggleLibNameMarquee(name));
     const add = document.createElement('button');
     add.className = 'small';
     add.textContent = '+ 添加';
@@ -1116,6 +1227,7 @@ function makeOnlineRow(t, vipEnabled) {
   name.className = 'lib-name';
   name.textContent = t.name;
   name.title = t.name;
+  name.addEventListener('click', () => toggleLibNameMarquee(name));
   const meta = document.createElement('span');
   meta.className = 'lib-meta';
   meta.textContent = [t.artist, t.durationMs ? fmt(t.durationMs) : ''].filter(Boolean).join(' · ');

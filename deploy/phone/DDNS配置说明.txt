@@ -1,36 +1,77 @@
 DDNS 配置说明（手机自动更新域名）
 ====================================
 
-背景：路由器（联通全屋通 MSG1500）没有 DDNS 功能，
-所以让手机自己定时把公网 IP 更新到域名解析上。
+本教程让运行 Termux 的手机定时把当前公网 IP 更新到 DNSPod。
+listen.example.com 是示例域名，请替换为自己在 DNSPod 管理的域名。
 
-【第 1 步】等域名审查通过
-  域名显示"正常"后，确认 DNSPod 控制台（dnspod.cn）里能看到 emenlisten.top
+【第 1 步】准备域名与 API Token
+  1. 登录 DNSPod 控制台，确认能够管理目标域名和解析记录。
+  2. 在账户的密钥管理中创建 DNSPod API Token。
+  3. 保存 Token ID 和 Token，仅填写到下面的私人配置文件。
 
-【第 2 步】创建 API Token
-  1. 用腾讯云账号登录 dnspod.cn
-  2. 右上角用户中心 → 密钥管理 → API Token → 创建 Token
-  3. 会得到两串：ID 和 Token，都复制保存
+【第 2 步】安装工具并放置脚本
+  在手机 Termux 中执行：
 
-【第 3 步】在手机 Termux 里安装工具
-  pkg install jq cronie
-  把 ddnspod-update.sh 放到 ~/ddns/ 目录：
-  mkdir -p ~/ddns && cp ~/ddnspod-update.sh ~/ddns/
+  pkg install curl jq cronie
+  mkdir -p "$HOME/ddns"
 
-【第 4 步】填写 Token
-  编辑 ~/ddns/ddnspod-update.sh（用 nano 或 vi），
-  把 ID="你的DNSPod_Token_ID" 和 TOKEN="你的DNSPod_Token"
-  换成第 2 步拿到的两串，保存
+  在解压后的手机部署包根目录执行：
+  PHONE_FILES_DIR="$PWD"
 
-【第 5 步】手动运行一次验证
-  bash ~/ddns/ddnspod-update.sh
-  看到"更新成功 → 183.191.x.x"就对了
+  如果直接使用源码，则在项目根目录执行：
+  PHONE_FILES_DIR="$PWD/deploy/phone"
 
-【第 6 步】设置每 5 分钟自动检查
-  crontab -e
-  加一行：
-  */5 * * * * bash ~/ddns/ddnspod-update.sh >> ~/ddns/ddns.log 2>&1
-  保存退出，然后执行：
+  再复制脚本：
+  cp "$PHONE_FILES_DIR/ddnspod-update.sh" "$HOME/ddns/ddnspod-update.sh"
+
+【第 3 步】创建私人配置文件
+  默认配置文件：
+  ${LISTEN_TOGETHER_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/listen-together}/ddns.conf
+
+  执行：
+
+  CONFIG_DIR="${LISTEN_TOGETHER_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/listen-together}"
+  mkdir -p "$CONFIG_DIR"
+  chmod 700 "$CONFIG_DIR"
+  (umask 077; cp -n "$PHONE_FILES_DIR/ddns-config.example.conf" "$CONFIG_DIR/ddns.conf")
+  chmod 600 "$CONFIG_DIR/ddns.conf"
+
+  用文本编辑器编辑 "$CONFIG_DIR/ddns.conf"，内容如下：
+
+  DOMAIN='listen.example.com'
+  SUB_DOMAIN=''
+  ID='你的DNSPod_Token_ID'
+  TOKEN='你的DNSPod_Token'
+
+  将示例域名、Token ID 和 Token 换成自己的值；SUB_DOMAIN 按实际解析记录填写。
+  配置采用 shell 赋值语法，保留引号。无需把真实凭据写入更新脚本或项目仓库。
+
+  如需使用其他配置文件，可设置 DNSPOD_CONFIG_FILE，例如：
+  export DNSPOD_CONFIG_FILE="$CONFIG_DIR/ddns.conf"
+
+  DNSPOD_DOMAIN、DNSPOD_SUB_DOMAIN、DNSPOD_ID、DNSPOD_TOKEN
+  环境变量可以覆盖配置文件中的对应值。
+
+【第 4 步】手动验证
+  bash "$HOME/ddns/ddnspod-update.sh"
+
+  如指定其他配置文件：
+  DNSPOD_CONFIG_FILE="$CONFIG_DIR/ddns.conf" bash "$HOME/ddns/ddnspod-update.sh"
+
+  查看日志是否报告更新成功或地址无需更新，并在 DNSPod 控制台核对解析记录。
+  再从外部网络检查域名解析是否指向当前公网 IP。
+
+【第 5 步】每 5 分钟检查一次
+  执行 crontab -e，添加一行（默认配置目录适用）：
+
+  */5 * * * * bash "$HOME/ddns/ddnspod-update.sh" >> "$HOME/ddns/ddns.log" 2>&1
+
+  保存后启动定时服务：
   sv-enable crond && sv up crond
 
-以后公网 IP 一变，最多 5 分钟域名就会指向新 IP。
+  如果使用自定义配置目录或文件，请在 cron 命令中显式指定
+  DNSPOD_CONFIG_FILE 为该配置文件的实际绝对路径；cron 不会自动继承
+  交互终端中 export 的变量。
+
+  手机需要保持联网，且定时服务需要持续运行。公网地址变化后会在下一次
+  成功检查时提交更新，实际生效时间还受 DNS 缓存影响。

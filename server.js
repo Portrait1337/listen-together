@@ -4,6 +4,7 @@ const http = require('http');
 const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
+const compression = require('compression');
 const { WebSocketServer, WebSocket } = require('ws');
 const online = require('./online');
 const cos = require('./cos');
@@ -70,6 +71,7 @@ const ONLINE_CACHE_TTL_MS = Number(process.env.ONLINE_CACHE_TTL_MS) || 60000;
 const ONLINE_RATE_WINDOW_MS = Number(process.env.ONLINE_RATE_WINDOW_MS) || 10000;
 const ONLINE_RATE_MAX = Number(process.env.ONLINE_RATE_MAX) || 10;
 const ONLINE_VIP_CACHE_TTL_MS = 10 * 60 * 1000; // 会员播放地址缓存 10 分钟（CDN 地址约 20 分钟有效）
+const NETEASE_VIP_REFRESH_MS = Number(process.env.NETEASE_VIP_REFRESH_MS) || 30000; // Cookie 文件轮询间隔
 const ONLINE_MAX_CONCURRENT_DOWNLOADS = Number(process.env.ONLINE_MAX_CONCURRENT_DOWNLOADS) || 3; // 在线歌曲并发下载数上限，防带宽/连接被刷爆
 const ONLINE_MAX_CONCURRENT_SEARCHES = Number(process.env.ONLINE_MAX_CONCURRENT_SEARCHES) || 5; // 在线搜索并发上限（每次搜索最多发 4 个第三方请求），防出站请求放大
 const ONLINE_FILE_TTL_MS = Number(process.env.ONLINE_FILE_TTL_MS) || 24 * 60 * 60 * 1000; // 在线下载文件无人引用 24 小时后清理（缓存性质，可重新下载）
@@ -166,8 +168,16 @@ let onlineDownloads = 0; // 当前进行中的在线下载数（并发上限用�
 let onlineSearches = 0; // 当前进行中的在线搜索数（并发上限用）
 const onlineVipCache = new Map(); // trackId -> { url, at }，会员播放地址短缓存
 let neteaseVip = { valid: false, nickname: '' }; // 会员登录状态，10 分钟刷新一次
+let lastVipCheckVersion = null;
+let lastVipCheckAt = 0;
 
 async function refreshNeteaseVip() {
+  // Cookie 配置没变且最近 10 分钟内校验过就直接跳过，避免频繁请求网易云
+  const version = online.getNeteaseCookieVersion();
+  const now = Date.now();
+  if (version === lastVipCheckVersion && now - lastVipCheckAt < 10 * 60 * 1000) return;
+  lastVipCheckVersion = version;
+  lastVipCheckAt = now;
   neteaseVip = await online.checkNeteaseLogin();
 }
 
@@ -281,7 +291,19 @@ function cleanupOrphanOnlineFiles() {
   }
 }
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(compression()); // gzip：文本类资源压缩后经隧道传输体积减少 70%+
+app.use(
+  express.static(path.join(__dirname, 'public'), {
+    setHeaders: (res, filePath) => {
+      // 带版本号（?v=）的静态资源可以长缓存；index.html 不缓存，保证新版本即时可见
+      if (path.basename(filePath) === 'index.html') {
+        res.setHeader('Cache-Control', 'no-cache');
+      } else {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    },
+  })
+);
 app.use(
   '/uploads',
   express.static(UPLOAD_DIR, {
@@ -1098,9 +1120,9 @@ server.listen(PORT, () => {
   // 启动时异步建立曲库索引并清理一次孤儿上传文件
   refreshLibraryIndex();
   cleanupOrphanUploads();
-  // 会员登录状态：启动时校验一次，之后每 10 分钟刷新（Cookie 会过期）
+  // 会员登录状态：启动时校验一次，之后定期刷新；Cookie 文件变化时 30 秒内自动重校验
   refreshNeteaseVip();
-  setInterval(refreshNeteaseVip, 10 * 60 * 1000).unref();
+  setInterval(refreshNeteaseVip, NETEASE_VIP_REFRESH_MS).unref();
 });
 
 // 曲库索引定期刷新；孤儿文件每天清理几次，防止磁盘被慢慢占满

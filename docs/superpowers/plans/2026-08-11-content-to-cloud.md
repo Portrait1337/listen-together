@@ -385,15 +385,20 @@ npm install cos-nodejs-sdk-v5
 
 - [ ] **Step 2: 传文件到手机并装依赖**
 
+先按手机上的 SSH 服务填写连接参数；`PHONE_SSH_TARGET` 的格式为
+`用户名@手机地址`，可在 Termux 中用 `whoami` 查看用户名，并在网络设置中查看手机地址。
+
 ```bash
-scp -P 8022 cos.js cos-config.json server.js package.json package-lock.json u0_a160@192.168.1.3:~/listen-together/
-ssh -p 8022 u0_a160@192.168.1.3 'cd ~/listen-together && npm install'
+: "${PHONE_SSH_TARGET:?请设置为手机 SSH 的用户名@地址}"
+PHONE_SSH_PORT="${PHONE_SSH_PORT:-8022}"
+scp -P "$PHONE_SSH_PORT" cos.js cos-config.json server.js package.json package-lock.json "$PHONE_SSH_TARGET:~/listen-together/"
+ssh -p "$PHONE_SSH_PORT" "$PHONE_SSH_TARGET" 'cd ~/listen-together && npm install'
 ```
 
 - [ ] **Step 3: 重启服务并验证上传走 COS**
 
 ```bash
-ssh -p 8022 u0_a160@192.168.1.3 'sv restart listen-together'
+ssh -p "$PHONE_SSH_PORT" "$PHONE_SSH_TARGET" 'sv restart listen-together'
 ```
 用测试脚本上传一个小文件，断言返回的 `track.url` 是 `https://...myqcloud.com/...` 开头；
 再用 curl 直接拉取该 URL，比对文件字节一致。

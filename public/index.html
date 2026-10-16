@@ -3,23 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#12100d">
+  <meta name="theme-color" content="#f7f4ed">
   <title>一起听</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='46' fill='%2312100d'/%3E%3Ccircle cx='50' cy='50' r='20' fill='%23f5a623'/%3E%3Ccircle cx='50' cy='50' r='6' fill='%2312100d'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/vendor/katex/katex.min.css?v=20260820">
-  <link rel="stylesheet" href="/styles.css?v=20260820">
+  <link rel="icon" type="image/svg+xml" href="/earphones.svg?v=20260924">
+  <link rel="stylesheet" href="/vendor/katex/katex.min.css?v=20260818">
+  <link rel="stylesheet" href="/styles.css?v=20260924-2">
 </head>
 <body>
   <!-- 首页：创建 / 加入房间 -->
   <div id="landing" class="screen screen-landing">
+    <div class="landing-topline"><img class="brand-mark" src="/earphones.svg?v=20260924" alt="" aria-hidden="true"><span>一起听 · 朋友的私人电台</span></div>
     <div class="hero">
+      <p class="eyebrow">把此刻，分享给彼此</p>
       <div class="hero-disc" aria-hidden="true">
         <div class="disc-grooves"></div>
         <div class="disc-label"><span>一起听</span></div>
         <div class="disc-hole"></div>
       </div>
       <h1 class="brand">一起听</h1>
-      <p class="sub">建个房间，和群友同步听同一段音频</p>
+      <p class="sub">同一首歌，同一刻心情。创建一个房间，邀请朋友一起听。</p>
     </div>
 
     <div class="card landing-card">
@@ -35,7 +37,7 @@
         <button id="createBtn" class="primary">创建房间</button>
         <button id="joinBtn" class="secondary">加入房间</button>
       </div>
-      <p class="landing-tip">当您没有房间码时点击创建房间创建您的房间</p>
+      <p class="landing-tip">还没有房间码？先创建房间，再把号码分享给朋友。</p>
       <p id="landingHint" class="hint" role="status" aria-live="polite"></p>
     </div>
 
@@ -49,6 +51,7 @@
   <!-- 房间页 -->
   <div id="room" class="screen screen-room hidden">
     <header class="room-head">
+      <div class="room-brand"><img class="brand-mark" src="/earphones.svg?v=20260924" alt="" aria-hidden="true"><span>一起听<small>LISTEN TOGETHER</small></span></div>
       <div class="room-id">
         <span class="room-label">房间号</span>
         <div class="room-code-row">
@@ -66,6 +69,7 @@
 
     <!-- 正在播放 -->
     <div class="card player-card">
+      <div class="player-kicker"><span class="live-dot"></span> 共听现场 <span class="player-kicker-line"></span> NOW PLAYING</div>
       <div class="now-playing">
         <div id="vinyl" class="disc disc-mini" aria-hidden="true">
           <div class="disc-grooves"></div>
@@ -96,7 +100,7 @@
     <!-- 播放列表 -->
     <div class="card queue-card">
       <div class="card-head">
-        <span class="head-title">播放列表 <span id="queueCount" class="count">0</span></span>
+        <span class="head-title">接下来听 <span id="queueCount" class="count">0</span></span>
         <div class="head-btns">
           <button id="modeBtn" class="small mode-btn" aria-label="切换播放模式">顺序</button>
           <button id="uploadBtn" class="small">上传音频</button>
@@ -120,7 +124,7 @@
 
     <!-- 房内聊天 -->
     <div class="card chat-card">
-      <div class="card-head"><span class="head-title">房内聊天</span></div>
+      <div class="card-head"><span class="head-title">边听边聊</span><span class="chat-head-note">房间里的话，只留在此刻</span></div>
       <div id="chatList" class="chat-list" aria-live="polite"></div>
       <div class="chat-input-row">
         <input id="chatInput" type="text" placeholder="说点什么…" maxlength="200" aria-label="聊天内容">
@@ -141,7 +145,7 @@
   <!-- 主播放器：必须挂在页面上，iOS 浏览器才允许它真正出声 -->
   <audio id="player" playsinline webkit-playsinline preload="auto"></audio>
 
-  <script src="/sync-policy.js?v=20260820"></script>
-  <script src="/app.js?v=20260820"></script>
+  <script src="/sync-policy.js?v=20260818"></script>
+  <script src="/app.js?v=20260818"></script>
 </body>
 </html>

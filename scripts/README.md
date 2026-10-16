@@ -1,35 +1,47 @@
-# cpolar 隧道开机自启（一起听项目）
+# macOS cpolar 隧道与手机部署包
 
-## 文件说明
+## cpolar 开机自启
 
-- `cpolar-tunnel.sh`：守护脚本，启动 cpolar 隧道并在退出后自动重启
-- `com.peng.cpolar-listen-together.plist`：macOS 开机自启配置（LaunchAgent）
-
-实际运行时，脚本会被安装到 `~/.cpolar/bin/cpolar-tunnel.sh`（cpolar 程序也复制到了 `~/.cpolar/bin/cpolar`）。
-这是因为 macOS 对"文稿"文件夹有隐私保护，后台自启任务无法读取放在那里的文件。
-
-## 日常使用
+先准备 Node.js、项目依赖和已配置的 cpolar。以下命令在项目根目录执行：
 
 ```bash
-# 查看隧道日志（含公网地址）
-tail -f ~/.cpolar/logs/cpolar-tunnel.log
-
-# 只看当前公网地址
-grep 'Tunnel established' ~/.cpolar/logs/cpolar-tunnel.log | tail -1
-
-# 立即停止/启动自启任务
-launchctl bootout gui/$(id -u)/com.peng.cpolar-listen-together
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.peng.cpolar-listen-together.plist
-
-# 彻底卸载（删除自启配置）
-launchctl bootout gui/$(id -u)/com.peng.cpolar-listen-together
-rm ~/Library/LaunchAgents/com.peng.cpolar-listen-together.plist
+CPOLAR_BIN="$HOME/.cpolar/bin/cpolar" zsh scripts/install-cpolar.sh
 ```
 
-注意：守护脚本启动时如果检测到 `一起听` 网页服务（3000 端口）没在运行，会自动把它拉起来
-（日志：`/tmp/listen-together.log`），所以电脑开机后不用手动操作。
+安装器会把守护脚本放到 `~/.cpolar/bin/`，生成当前用户的绝对路径，并注册通用标识 `org.listen-together.cpolar`。首次安装把项目目录、Node 和 cpolar 路径写入用户私人配置目录的 `cpolar.conf`；已有配置不会覆盖。需要指定其他程序路径时，通过 `APP_DIR`、`NODE_BIN`、`CPOLAR_BIN` 提供首次安装值。
 
-如果只是临时想停掉网页服务，可以执行：`pkill -f "node server.js"`，隧道会照常运行但访问会失败。
+默认私人目录为 `${XDG_CONFIG_HOME:-$HOME/.config}/listen-together`，可用 `LISTEN_TOGETHER_CONFIG_DIR` 指定。LaunchAgent 会记录该目录，登录自启时仍能找到配置。生成的 plist 只存在本机用户目录，仓库中的 `org.listen-together.cpolar.plist` 是待安装器填充的模板。
 
-免费版限制：隧道每次重连（比如重启电脑）会重新分配随机地址，需要把新地址重新发给群友。
-想要固定地址，升级 cpolar 基础版（99 元/年，保留 3 个子域名）或专业版（自定义域名）即可。
+```bash
+# 先生成本地文件供检查，暂不加载 LaunchAgent
+zsh scripts/install-cpolar.sh --no-load
+
+# 查看配置（本机路径不应复制到公开文档）
+# $LISTEN_TOGETHER_CONFIG_DIR/cpolar.conf，未设置变量时见上面的默认目录
+
+# 查看隧道和网页服务日志
+tail -f "$HOME/.cpolar/logs/cpolar-tunnel.log"
+tail -f "$HOME/.cpolar/logs/server.log"
+
+# 停止或启动服务
+launchctl bootout "gui/$(id -u)/org.listen-together.cpolar"
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/org.listen-together.cpolar.plist"
+```
+
+`cpolar.conf` 可配置 `APP_DIR`、`NODE_BIN`、`CPOLAR_BIN`、`PORT`（默认 `3000`）、`TUNNEL_ADDR`（默认跟随 `PORT`）、`LOG_FILE` 和 `SERVER_LOG_FILE`。运行配置是本机 shell 文件，请只保存自己信任的配置内容。守护脚本检查网页服务，必要时启动 `server.js`，并在隧道退出后重试。
+
+已有旧版自启服务时，正常安装会停止旧标识，将旧 plist 移入私人目录的 `legacy-launchagents/`，再加载通用标识；隧道会因此重新连接。`--no-load` 仅生成文件，不迁移旧服务；检查后应运行一次正常安装，避免下次登录同时加载新旧配置。
+
+## 生成手机部署包
+
+安装系统 `zip` 命令后，在项目根目录执行：
+
+```bash
+node scripts/build-phone-package.js
+```
+
+默认输出 `deploy/phone-部署包.zip`，也可在命令后指定其他输出路径。脚本按发布文件清单重新生成压缩包，包含当前运行代码、页面资源、安装说明和配置样例；不包含真实凭据、私人笔记、音频文件、依赖目录或 Git 记录。
+
+手机安装步骤见 [安装说明](../deploy/phone/安装说明.txt)，DDNS 配置见 [DDNS 说明](../deploy/phone/DDNS配置说明.txt)。
+
+`scripts/migrate-uploads-cos.js` 是已有上传文件的可选转存工具，运行前需先配置 COS；它不删除本地音频，也不自动重写房间歌单。

@@ -1,19 +1,22 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # 一起听 - DNSPod DDNS 更新脚本（在手机上定时运行）
-# 作用：检测家庭公网 IP 变化，自动更新 emenlisten.top 的 A 记录
-#
-# 用法：
-#   1. 安装 jq 和 cron：  pkg install jq cronie
-#   2. 填好下面的 ID 和 TOKEN（DNSPod 控制台 → 用户中心 → 密钥管理 → API Token）
-#   3. 运行一次验证：    bash ~/ddns/ddnspod-update.sh
-#   4. 加入定时任务：    crontab -e  添加一行（见文件底部注释）
+# 作用：检测公网 IP 变化，自动更新本地配置指定域名的 A 记录。
+# 私人配置与发布代码分开，定时任务仍使用本脚本。
 
-# ================= 需要修改的部分 =================
-DOMAIN="emenlisten.top"
-SUB_DOMAIN=""                      # 留空 = 域名本身；填 www 则只更新 www. 记录
-ID="你的DNSPod_Token_ID"
-TOKEN="你的DNSPod_Token"
-# =================================================
+CONFIG_DIR="${LISTEN_TOGETHER_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/listen-together}"
+DNSPOD_CONFIG_FILE="${DNSPOD_CONFIG_FILE:-$CONFIG_DIR/ddns.conf}"
+if [ -f "$DNSPOD_CONFIG_FILE" ]; then
+  . "$DNSPOD_CONFIG_FILE"
+fi
+DOMAIN="${DNSPOD_DOMAIN:-${DOMAIN:-}}"
+SUB_DOMAIN="${DNSPOD_SUB_DOMAIN-${SUB_DOMAIN:-}}"
+ID="${DNSPOD_ID:-${ID:-}}"
+TOKEN="${DNSPOD_TOKEN:-${TOKEN:-}}"
+if [ -z "$DOMAIN" ] || [ -z "$ID" ] || [ -z "$TOKEN" ] ||
+   [[ "$ID" == *你的* ]] || [[ "$TOKEN" == *你的* ]]; then
+  echo "缺少 DDNS 配置：请配置本地 ddns.conf 或 DNSPOD_* 环境变量" >&2
+  exit 1
+fi
 
 IP_URL="https://ipinfo.io/ip"
 API="https://dnsapi.cn"
